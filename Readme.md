@@ -4,7 +4,7 @@
 _SNAFUzz_ is a snapshot-based fuzzer designed to attack the Windows kernel or userspace components.
 The system loosely consists of four components:
 - A custom hypervisor capable of booting Windows 11.
-- A deterministic full system emulator designed for fuzzing.
+- A deterministic full system emulator designed for snapshot fuzzing.
 - A builtin WinDbg-Style Debugger used to create snapshots and root-cause crashes.
 - A framework for implementing target-specific input injection code.
 
@@ -26,9 +26,9 @@ Versions of this tool have found multiple bugs including [CVE-2021-43247](https:
 
 Two different modes are implemented, a _Snapshot Mode_ and the _Fuzzing Mode_. Snapshot Mode uses the hypervisor and we emulate a framebuffer, a disk, a mouse and, a keyboard
 to essentially provide the interface you would expect from a virtual machine. All writes to the disk will be temporary and will not be applied to the vhdx.
-To boot from a virtual disk (.vhdx) simply use: `emulator.exe <.vhdx-file>`. 
+To boot from a virtual disk (.vhdx) simply use: `snafuzz.exe <.vhdx-file>`. 
 Once booted, you can take a snapshot by using `CTRL-C` inside the command prompt to break in the debugger and use the `snapshot` command.
-The `.snapshot`-file can then also be used to reload the system using it as the argument: `emulator.exe <.snapshot-file>`.
+The `.snapshot`-file can then also be used to reload the system using it as the argument: `snafuzz.exe <.snapshot-file>`.
 
 <p align='center'>
 <img src='images/taking_snapshot_and_reloading_it.gif' alt="Taking a snapshot and then reloading it.">
@@ -53,14 +53,14 @@ a Gen 2 VM with TPM enabled, at least 4 GiB Ram, at least 64 GB of disk space an
 
 ## Fuzzing and target-specific code
 
-The command-line for the `emulator.exe` is split into two parts:
+The command-line for the `snafuzz.exe` is split into two parts:
 ```
-emulator.exe <snapshot-options> -- <target-specific-code options>
+snafuzz.exe <snapshot-options> -- <target-specific-code options>
 ```
 If the `--` is specified we are in fuzzing mode and all options after it are passed to the target-specific code. 
 The default "target-specific" code (`default_target.c`) has two modes
 ```
-C:\src\dmp_emulator>emulator.exe snap.snapshot --
+C:\projects\snafuzz>snafuzz.exe snap.snapshot --
 ...
 Default target usages:
     kernel_snapshot: <\Device\DeviceName> [ioctl...]
@@ -94,14 +94,14 @@ For a more documentation for writing target-specific code see `target_specific_c
 
 To allow fuzzing snapshots taken from physical machines, as well as version of Windows which fail to boot in the hypervisor, 
 full kernel .DMP-files can also be used as snapshot files. These can be produced by using [KDNET](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/setting-up-a-network-debugging-connection-automatically)
-to attach WinDbg to the target machine and then using `.dump /f C:\path\to\dump.dmp` command. To start fuzzing the .DMP-file is then passed as an argument: `emulator.exe C:\path\to\dump.dmp -- <fuzzing-options>`.
+to attach WinDbg to the target machine and then using `.dump /f C:\path\to\dump.dmp` command. To start fuzzing the .DMP-file is then passed as an argument: `snafuzz.exe C:\path\to\dump.dmp -- <fuzzing-options>`.
 Here is an example of using the `default_target.c` to fuzz [HEVD.sys](https://github.com/hacksysteam/HackSysExtremeVulnerableDriver).
 
 <p align='center'>
 <img src='images/using_dmp_to_fuzz.gif' alt="Producing a DMP file using kernel_snapshot.exe.">
 </p>
 
-If the target machine is a virtual machine, one can also provide the virtual disk as an argument, allowing for disk-emulation during fuzzing: `emulator.exe C:\path\to\dump.dmp C:\path\to\disk.vhdx -- <fuzzing-options>`.
+If the target machine is a virtual machine, one can also provide the virtual disk as an argument, allowing for disk-emulation during fuzzing: `snafuzz.exe C:\path\to\dump.dmp C:\path\to\disk.vhdx -- <fuzzing-options>`.
 For virtual machines, it is also important to make sure _Dynamic Memory_ is disabled as otherwise WinDbg fails to create the full kernel dump with the error: "Unable to read MmPhysicalMemoryBlock"
 and (when passing the .vhdx) it is important to disable "Checkpoints", as the system currently only supports normal .vhdx and not .avhdx.
 
