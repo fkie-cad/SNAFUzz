@@ -27,6 +27,58 @@ int _fltused;
 #include <stdarg.h>
 #include <stdint.h>
 
+#include <intrin.h>
+
+#ifdef __clang__
+
+unsigned long __readcr8(void){
+    u64 val;
+    __asm__ volatile("mov %%cr8, %0" : "=r"(val));
+    return (unsigned long)val;
+}
+
+void __writecr8(unsigned int val){
+    u64 _val = val;
+    __asm__ volatile("mov %0, %%cr8" :: "r"(_val));
+}
+
+void __sidt(void *idtr_ptr) {
+    struct __attribute__((packed)) idtr {
+        uint16_t limit;
+        uint64_t base;
+    } *idtr = idtr_ptr;
+    
+    __asm__ volatile("sidt %0" : "=m"(*idtr));
+}
+
+void __writemsr(unsigned long msr, u64 value) {
+    uint32_t low = value & 0xFFFFFFFF;
+    uint32_t high = value >> 32;
+    __asm__ volatile("wrmsr"
+            :
+            : "c"(msr), "a"(low), "d"(high));
+}
+
+void *memset(void *mem, int val, size_t amount){
+    u8 *it = mem;
+    for(size_t i = 0; i < amount; i++){
+        *it++ = (u8)val;
+    }
+    return mem;
+}
+
+void *memcpy(void *dest, const void *source, size_t amount){
+    u8 *it  = dest;
+    const u8 *it2 = source;
+    for(size_t i = 0; i < amount; i++){
+        *it++ = *it2++;
+    }
+    
+    return dest;
+}
+
+#endif
+
 struct efi_handle{ void *value; };
 struct efi_event{ void *value; };
 
@@ -1222,7 +1274,7 @@ efi_status efi_get_memory_map(u64 *in_out_memory_map_size, struct efi_memory_des
     
     int success = 0;
     if(*in_out_memory_map_size >= sizeof(struct efi_memory_descriptor) * g_efi_memory_map.size){
-        __movsb(memory_map, g_efi_memory_map.data, g_efi_memory_map.size * sizeof(struct efi_memory_descriptor));
+        __movsb((u8 *)memory_map, (u8 *)g_efi_memory_map.data, g_efi_memory_map.size * sizeof(struct efi_memory_descriptor));
         success = 1;
     }
     
@@ -1694,7 +1746,7 @@ efi_status efi_get_next_variable(u64 *inout_variable_name_size, u16 *inout_varia
         return EFI_BUFFER_TOO_SMALL;
     }
     
-    __movsb(inout_variable_name, variable->variable_name, size_required);
+    __movsb((u8 *)inout_variable_name, (u8 *)variable->variable_name, size_required);
     return EFI_SUCCESS;
 }
 
@@ -2431,10 +2483,10 @@ void entry(u8 *boot_file_base, u64 page_table_pages, u64 efi_system_partition_st
             .SkuNumber = 0x5,
             .Family = 0x6,
         };
-        __movsb(out, &system_information, sizeof(system_information));
+        __movsb((u8 *)out, (u8 *)&system_information, sizeof(system_information));
         out += sizeof(system_information)-1;
         
-#define out_string(a) do{__movsb(out, a, sizeof(a)); out += sizeof(a); } while(0)
+#define out_string(a) do{__movsb((u8 *)out, (u8 *)a, sizeof(a)); out += sizeof(a); } while(0)
         out_string("Microsoft Corporation");
         out_string("Virtual Machine");
         out_string("Hyper-V UEFI Release v4.0");

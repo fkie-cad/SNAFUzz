@@ -1290,8 +1290,6 @@ void start_execution_hypervisor(struct context *context){
                 // This is only caused by `cancel_virtual_processor`.
                 // Which happens on Ctrl-C and when an input is pending.
                 
-                print("intr %d\n", kvm_run->s.regs.events.interrupt.injected);
-                
                 int did_something = hacky_display_input_handling(context);
                 if(did_something) break; // For now, only ever initiate one event in an update.
             }break;

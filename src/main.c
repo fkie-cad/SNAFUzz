@@ -747,6 +747,20 @@ static u64 calculate_time_reference_counter(struct context *context, struct regi
     return ScaledTscHigh + TscOffset;
 }
 
+void set_next_timer_interrupt_time(struct context *context, struct registers *registers){
+    if(!context->use_hypervisor) return;
+    if(!(registers->hv_x64_msr_reference_tsc_page & 1)) return;
+    
+    u64 time_reference_counter = calculate_time_reference_counter(context, registers);
+    
+    u64 timer = registers->hv_x64_msr_stimer0_count;
+    if(registers->hv_x64_msr_stimer0_config & /*periodic*/2) timer += time_reference_counter;
+    
+    if(timer > time_reference_counter){
+        context->next_timer_interrupt_time_or_zero = timer;
+    }
+}
+
 
 #include "pdb.c"
 #include "loaded_module.c"
@@ -774,7 +788,7 @@ static u64 calculate_time_reference_counter(struct context *context, struct regi
 #include "instruction_helpers.c"
 
 #include "jit.c"
-#include "hypervisor.c"
+#include "hacky_display_input_handling.c"
 
 #if _WIN32
 #include "hyperv.c"

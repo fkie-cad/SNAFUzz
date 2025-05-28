@@ -288,8 +288,6 @@ void initialize_hypervisor(struct context *context){
     context->Partition = Partition;
 }
 
-
-
 void hypervisor_pend_interrupt(struct context *context, struct registers *registers, u32 vector_number){
     (void)registers;
     
