@@ -1,0 +1,21 @@
+
+# Ignored folders
+build
+coverage
+crashes
+symbols
+
+# Ignored binary files
+snafuzz.exe
+snafuzz
+
+# Ignored snapshot files
+*.dmp
+*.snapshot
+*.crash
+
+# Ignored text files
+*.log
+*.txt
+
+
