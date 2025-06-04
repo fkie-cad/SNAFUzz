@@ -1678,6 +1678,30 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             emit_inst(0xC7, reg(4, /*mov*/0, ARG_REG_3)); emit32(PERMISSION_read); // @cleanup: Why does this say read
             emit(0x48, 0xB8); emit64((u64)translate_rip_to_physical);
             emit(0xff, make_modrm(MOD_REG, /*call*/2, REGISTER_A));
+            
+            // 
+            // Check if the instruction matches what we expect.
+            // 
+            //     mov rcx, instruction_rip + instruction_size
+            //     cmp rax, rcx
+            //     je .continue
+            // 
+            //     mov [context + .crash], CRASH_reset_jit
+            //     jmp [context->jit_exit]
+            //     
+            // .continue:
+            // 
+            
+            u64 second_page = translate_rip_to_physical(context, instruction_rip + instruction_size, PERMISSION_execute);
+            emit(0x48, (u8)(0xb8 + REGISTER_C)); emit64(second_page); // saved_physical starts out at 0, it does not matter as success will not jump either way.
+            emit_inst(0x3B, reg(8, REGISTER_A, REGISTER_C));
+            emit(0x74); u8 *continue_patch = emit_get_current(context); emit(0);
+            
+            emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, crash)); emit32(CRASH_reset_jit);
+            emit(0xff, make_modrm(MOD_REGM_OFF32, 4, NONVOL_context)); emit32(offset_in_type(struct context, jit_exit));
+            
+            // .continue:
+            *continue_patch = (u8)(emit_get_current(context) - (continue_patch + 1));
         }
         
         amount_of_instructions_in_block += 1;
@@ -6494,26 +6518,6 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     return emit_jit_result;
 }
 
-int instruction_cache_entry_matches_rip(struct context *context, struct instruction_cache_entry *entry, u64 virtual_rip, u64 physical_rip){
-    
-    // 
-    // The start has to match exactly.
-    if(entry->physical_rip != physical_rip) return 0;
-    
-    // 
-    // If it is all contained in one page, we are good.
-    if(entry->physical_second_page == (u64)-1) return 1;
-    
-    // 
-    // Lookup the next page for the virtual rip.
-    // Make sure to use 'PERMISSION_none', otherwise unnecessary accessed bits are set. :AccessedBitsForInstructionBlockRip
-    u64 next_page_physical_address = translate_rip_to_physical(context, (virtual_rip + 0x1000) & ~0xfff, PERMISSION_none);
-    
-    // 
-    // Return whether the instruction ends on the correct page.
-    return next_page_physical_address == entry->physical_second_page;
-}
-
 void handle_instruction_cache_miss(struct context *context, struct instruction_cache_entry *instruction_cache_entry, u64 instruction_rip, u64 physical_rip){
     
     if((context->jit_block_table.amount_of_entries + 1) > (context->jit_block_table.maximal_size_minus_one >> 1)){
@@ -6540,11 +6544,6 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
         context->jit_block_table.entries = new_entries;
     }
     
-    // :AccessedBitsForInstructionBlockRip
-    // Make sure to pass 'PERMISSION_none' when looking up the 'second_page',
-    // to avoid setting accessed bits unnecessarily.
-    u64 physical_second_page = translate_rip_to_physical(context, (instruction_rip + 0x1000) & ~0xfff, PERMISSION_none);
-    
     u64 index = 0;
     u64 hash = physical_rip;
     xor_shift(&hash);
@@ -6558,12 +6557,9 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
         if(!jit_block->jit_code) break;
         
         if(jit_block->physical_rip == physical_rip){
-            if(jit_block->physical_second_page == (u64)-1 || jit_block->physical_second_page == physical_second_page){
-                instruction_cache_entry->instruction_jit = jit_block->jit_code;
-                instruction_cache_entry->physical_rip = jit_block->physical_rip;
-                instruction_cache_entry->physical_second_page = jit_block->physical_second_page;
-                return;
-            }
+            instruction_cache_entry->instruction_jit = jit_block->jit_code;
+            instruction_cache_entry->physical_rip = jit_block->physical_rip;
+            return;
         }
     }
     
@@ -6582,16 +6578,15 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
     
     jit_block->jit_code     = emit_jit_result.jit_code;
     jit_block->physical_rip = physical_rip;
-    jit_block->physical_second_page = (u64)-1;
     
     instruction_cache_entry->instruction_jit = emit_jit_result.jit_code;
     instruction_cache_entry->physical_rip    = physical_rip;
-    instruction_cache_entry->physical_second_page = (u64)-1;
     
     if((emit_jit_result.block_start_rip & ~0xfff) != ((emit_jit_result.block_end_rip-1) & ~0xfff)){
-        instruction_cache_entry->physical_second_page = physical_second_page;
-        jit_block->physical_second_page = physical_second_page;
-        
+        // :AccessedBitsForInstructionBlockRip
+        // Make sure to pass 'PERMISSION_none' when looking up the 'second_page',
+        // to avoid setting accessed bits unnecessarily.
+        u64 physical_second_page = translate_rip_to_physical(context, (instruction_rip + 0x1000) & ~0xfff, PERMISSION_none);
         _bittestandset((void *)context->physical_memory_executed, (u32)(physical_second_page/0x1000)); // set the bit to indicate we have executed this page.
     }
     
@@ -6694,7 +6689,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
         static_assert((array_count(context->instruction_cache) & (array_count(context->instruction_cache) - 1)) == 0); // Needs to be a power of two, so we can user '&' instead of %.
         struct instruction_cache_entry *instruction_cache_entry = &context->instruction_cache[physical_rip & (array_count(context->instruction_cache) - 1)];
         
-        if(!instruction_cache_entry_matches_rip(context, instruction_cache_entry, registers->rip, physical_rip)){
+        if(instruction_cache_entry->physical_rip != physical_rip){
             
             //
             // We do not have this instruction in our cache, this could means we have to decode the instructions

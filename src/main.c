@@ -372,7 +372,6 @@ struct context{
     struct instruction_cache_entry{
         void *instruction_jit; // This should not be used directly, call into 'context->jit_entry(context, registers, instruction_cache_entry)' instead.
         u64 physical_rip;
-        u64 physical_second_page; // @note: (u64)-1 if it only spans one page.
     } instruction_cache[INSTRUCTION_CACHE_SIZE];
     
     //
@@ -419,7 +418,6 @@ struct context{
             struct jit_block{
                 u8 *jit_code;
                 u64 physical_rip;
-                u64 physical_second_page;
             } *entries;
         } jit_block_table;
         
