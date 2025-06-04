@@ -184,7 +184,7 @@ enum {
 
 // 
 // @note: @WARNING: We should not exceed 6 non-volatile registers as the system-V calling convention only supports 6 non-volatiles.
-//                  Currently we assume Microsoft x64 calling convention. 
+//                  Currently we support both te system-v and the Windows-x64 calling convention.
 //    
 //    Register   System-V    Windows-x64
 //      rax          v           v
@@ -411,9 +411,9 @@ void initialize_jit(struct context *context){
             // 2.
             //    and ecx, array_count(tlb.entries)-1
             //    lea ecx, [(sizeof(tlb_entry)/8) * rcx]
-            //    lea rcx, [context + 8 * rcx + offset_of(context, tlb)]
+            //    lea rcx, [context + 8 * rcx + offset_of(context, tlb) + .virtual_page_number]
             //    
-            //    cmp [rcx + .virtual_page_number], rax
+            //    cmp [rcx], rax
             //    jnz .slow_path
             static_assert(sizeof(struct translation_lookaside_buffer_entry) == 0x18);
             static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0);
@@ -428,8 +428,10 @@ void initialize_jit(struct context *context){
                 emit32(offset_in_type(struct context, read_tlb.entries) + offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number));
             }
             
-            emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C)); 
+            emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C));
             emit(0x75); u8 *patch_2 = emit_get_current(context); emit(0);
+            
+            static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0); // Need this for the offset in thype below to make sense.
             
             // 3.
             //    mov rax, [rcx + .extra_permission_page]
@@ -546,9 +548,9 @@ void initialize_jit(struct context *context){
             // 2.
             //    and ecx, array_count(tlb.entries)-1
             //    lea ecx, [(sizeof(tlb_entry)/8) * rcx]
-            //    lea rcx, [context + 8 * rcx + offset_of(context, tlb)]
+            //    lea rcx, [context + 8 * rcx + offset_of(context, tlb)  + .virtual_page_number]
             //    
-            //    cmp [rcx + .virtual_page_number], rax
+            //    cmp [rcx], rax
             //    jnz .slow_path
             static_assert(sizeof(struct translation_lookaside_buffer_entry) == 0x18);
             static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0);
@@ -558,6 +560,8 @@ void initialize_jit(struct context *context){
             emit_inst(0x8D, sib(8, MOD_REGM_OFF32, REGISTER_C, /*log(8)*/3, REGISTER_C, NONVOL_context));
             
             emit32(offset_in_type(struct context, write_tlb.entries) + offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number));
+            
+            static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0); // Need this for the offset_in_type below to make sense.
             
             emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C)); 
             emit(0x75); u8 *patch_2 = emit_get_current(context); emit(0);
@@ -733,6 +737,8 @@ void initialize_jit(struct context *context){
         // The 'jit_exit' just pops the function frame established by 'jit_entry' and returns.
         //
         context->jit_exit = emit_get_current(context);
+        
+        emit_inst(0x31, reg(4, REGISTER_A, REGISTER_A)); // xor eax, erax
         
 #if JIT_EMULATE_MXCSR
         // stmxcsr [registers + .mxcsr] :linux_refactor
@@ -954,7 +960,7 @@ void emit_write_gpr(struct context *context, struct guest_register dest, struct 
 }
 
 //_____________________________________________________________________________________________________________________
-// Rflag handling
+// RFLAGS handling
 
 // @note: This is called "destructively" as it alters the host rflags.
 //        Therefore, if you need the state of the intact, you have to save them first.
@@ -1221,13 +1227,6 @@ void emit_write_guest_register(struct context *context, struct host_register gue
     emit_write_pointer(context, guest_address_reg, host(REGISTER_D), size);
 }
 
-struct emit_jit_result{
-    u8 *jit_code;
-    
-    u64 block_start_rip;
-    u64 block_end_rip;
-};
-
 // We use that this does not touch eax. :linux_refactor
 void emit_push_pop_fpu_stack(struct context *context, int is_push){
     
@@ -1277,6 +1276,59 @@ void emit_push_pop_fpu_stack(struct context *context, int is_push){
     }
 }
 
+#if !DISABLE_TAILCALL_OPTIMIZTIONS
+
+#pragma pack(push,1)
+
+struct patchable_jit_exit{
+    // patchable_jit_exit:
+    //     movabs rcx, saved_physical
+    //     cmp rcx, rax
+    //     jz success (initialized to failiure)
+    //     
+    // failiure:
+    //     lea rax, [rip - patchable_jit_exit]
+    //     jmp context->jit_exit + sizeof(xor eax, eax)
+    // 
+    
+    u8 movabs[2]; u64 saved_physical;
+    u8 cmp[3];
+    u8 jz[2];  u32 success;
+    u8 lea[3]; u32 lea_offset;
+    u8 jmp;    u32 jit_exit;
+};
+
+#pragma pack(pop)
+
+void emit_patchable_jit_exit(struct context *context, struct host_register physical_address){
+    
+    assert(physical_address.encoding < 8);
+    
+    u8 *start = emit_get_current(context);
+    
+    enum register_encoding saved_physical_reg = (physical_address.encoding == REGISTER_A) ? REGISTER_C : REGISTER_A;
+    
+    emit(0x48, (u8)(0xb8 + saved_physical_reg)); emit64(0); // saved_physical starts out at 0, it does not matter as success will not jump either way.
+    
+    emit_inst(0x3B, reg(8, saved_physical_reg, physical_address.encoding));
+    emit(0x0f, 0x84); emit32(0);
+    emit(0x48, 0x8D, 0x05); emit32((u32)-offset_in_type(struct patchable_jit_exit, jmp));
+    
+    u32 exit_patch = (s32)((context->jit_exit + /*sizeof(xor eax, eax)*/2) - (emit_get_current(context) + 5));
+    emit(0xe9); emit32(exit_patch);
+    
+    assert((emit_get_current(context) - start) == sizeof(struct patchable_jit_exit));
+}
+
+#endif
+
+struct emit_jit_result{
+    u8 *jit_code;
+    
+    u64 block_start_rip;
+    u64 block_end_rip;
+};
+
 struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     
     struct emit_jit_result emit_jit_result = {0};
@@ -1285,6 +1337,30 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     // Save the beginning of the jit, this is what we will return in the end.
     //
     u8 *beginning_of_the_jit = emit_get_current(context);
+    
+    
+    {   // 
+        // Check if the timeout counter hit zero.
+        // 
+        
+        // sub NONVOL_timeout_counter, amount_of_instructions_in_block
+        emit(0x48 | REXB, 0x81, make_modrm(MOD_REG, REG_OPCODE_sub, NONVOL_timeout_counter)); emit32(0);
+        // emit32(amount_of_instructions_in_block);
+        
+        // jns .continue
+        emit(0x79); u8 *continue_patch = emit_get_current(context); emit(0);
+        
+        // mov [context + .crash], CRASH_timeout
+        emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, crash)); emit32(CRASH_timeout);
+        
+        // jmp [context->jit_exit]
+        emit(0xff, make_modrm(MOD_REGM_OFF32, 4, NONVOL_context));
+        emit32(offset_in_type(struct context, jit_exit));
+        
+        // .continue:
+        *continue_patch = (u8)(emit_get_current(context) - (continue_patch + 1));
+    }
+    
     
     u64 initial_rip = instruction_rip;
     int is_terminating_instruction = 0;
@@ -6396,33 +6472,21 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
 #endif
     }
     
-    {
-        // 
-        // Check if the timeout counter hit zero.
-        // 
-        
-        // sub NONVOL_timeout_counter, amount_of_instructions_in_block
-        emit(0x48 | REXB, 0x81, make_modrm(MOD_REG, REG_OPCODE_sub, NONVOL_timeout_counter)); emit32(0);
-        // emit32(amount_of_instructions_in_block);
-        
-        // jns .continue
-        emit(0x79); u8 *continue_patch = emit_get_current(context); emit(0);
-        
-        // mov [context + .crash], CRASH_timeout
-        emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, crash)); emit32(CRASH_timeout);
-        
-        // jmp [context->jit_exit]
-        emit(0xff, make_modrm(MOD_REGM_OFF32, 4, NONVOL_context));
-        emit32(offset_in_type(struct context, jit_exit));
-        
-        // .continue:
-        *continue_patch = (u8)(emit_get_current(context) - (continue_patch + 1));
-    }
+#if !DISABLE_TAILCALL_OPTIMIZTIONS
+    // First attempt, simply translate NONVOL_rip to physical and then emit a patchable jit entry.
+    //     translate_rip_to_physical(context, NONVOL_rip, PERMISSION_execute)
+    emit_inst(0x8B, reg(8, ARG_REG_1, NONVOL_context));
+    emit_inst(0x8B, reg(8, ARG_REG_2, NONVOL_rip));
+    emit_inst(0xC7, reg(8, /*mov*/0, ARG_REG_3)); emit32(PERMISSION_execute);
+    emit_call_to_helper(context, translate_rip_to_physical, HELPER_simple_call);
     
+    emit_patchable_jit_exit(context, host(REGISTER_A));
+#else
     // exit_jit:
     // jmp context->jit_exit
     u32 patch = (s32)(context->jit_exit - (emit_get_current(context) + 5));
     emit(0xe9);  emit32(patch);
+#endif
     
     emit_jit_result.jit_code = beginning_of_the_jit;
     emit_jit_result.block_start_rip = initial_rip;
@@ -6573,6 +6637,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
     
     u64 last_page_index = (registers->rip >> 12);
     u64 physical_rip = translate_rip_to_physical(context, registers->rip, PERMISSION_execute);
+    struct patchable_jit_exit *patchable_jit_entry = null;
     
     // If we get into the loop and should be single stepping, get into the debugger here.
     if(globals.print_trace){
@@ -6648,10 +6713,23 @@ struct crash_information jit_execute_until_exception(struct context *context){
         
         assert(context->skip_setting_permission_bits == 0);
         
+#if !DISABLE_TAILCALL_OPTIMIZTIONS
+        if(patchable_jit_entry){
+            
+            // Patch up the last entry, because we now know where it is supposed to jump.
+            patchable_jit_entry->saved_physical = physical_rip;
+            
+            u8 *jump_to   = instruction_cache_entry->instruction_jit;
+            u8 *jump_from = &patchable_jit_entry->lea[0];
+            
+            patchable_jit_entry->success = (s32)(jump_to - jump_from);
+        }
+#endif
+        
         //
         // Enter the jit.
         // 
-        (*context->jit_entry)(context, registers, instruction_cache_entry);
+        patchable_jit_entry = (*context->jit_entry)(context, registers, instruction_cache_entry);
         
         if(globals.debugger_mode){
             
@@ -6683,13 +6761,41 @@ struct crash_information jit_execute_until_exception(struct context *context){
             // This makes sure that the jit is always up to date with the breakpoints.
             // We could somehow reset less, but I think the complexity is not worth the
             // speed improvement.
-            if(should_reset) initialize_jit(context);
+            if(should_reset){
+                initialize_jit(context);
+                patchable_jit_entry = 0;
+            }
         }
         
         if(context->crash == CRASH_reset_jit){
             initialize_jit(context);
             context->crash = CRASH_none;
+            patchable_jit_entry = 0;
         }
+        
+#if 1
+        {   // Some dumb stats, this only works if there is only one thread.
+            static u64 start_timeout, last_timeout;
+            static double start_time;
+            static double last_time;
+            if(last_timeout == 0){
+                start_timeout = last_timeout = context->fuzz_case_timeout;
+                start_time    = last_time    = os_get_time_in_seconds();
+            }
+            
+            u64 instructions_executed = context->fuzz_case_timeout - last_timeout;
+            if(instructions_executed > 100ull * 1000 * 1000){
+                last_timeout = context->fuzz_case_timeout;
+                
+                double time = os_get_time_in_seconds();
+                
+                if(time - last_time > 1){
+                    last_time = time;
+                    print("mips = %f\n", (start_timeout - last_timeout) / ((time - start_time) * 1000000.0));
+                }
+            }
+        }
+#endif
         
         //
         // Once we returned from the jit, there are two possibilities,

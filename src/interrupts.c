@@ -216,6 +216,7 @@ void pend_interrupt(struct context *context, struct registers *registers, u32 ve
     apic_pend_interrupt(registers, vector_number);
 }
 
+// Called from the jit after an instruction is executed that might cause a pending interrupt to be delivered.
 int check_for_interrupts(struct context *context, struct registers *registers){
     
     int interrupt_requested = apic_get_pending_interrupt(registers);

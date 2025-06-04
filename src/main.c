@@ -395,7 +395,7 @@ struct context{
         // The jit entry, only call this if you want to enter the jit! 
         // This is called from 'start_execution_jit'.
         //
-        void (*jit_entry)(struct context *context, struct registers *registers, struct instruction_cache_entry *instruction_cache_entry);
+        struct patchable_jit_exit *(*jit_entry)(struct context *context, struct registers *registers, struct instruction_cache_entry *instruction_cache_entry);
         
         //
         // The 'jit_exit' undoes the stack frame created by 'jit_entry'.

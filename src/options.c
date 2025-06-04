@@ -79,6 +79,8 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 
 #define DISABLE_JIT_TLB 0
 
+#define DISABLE_TAILCALL_OPTIMIZTIONS 1
+
 //_____________________________________________________________________________________________________________________
 // Hypervisor options
 
