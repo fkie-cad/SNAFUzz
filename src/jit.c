@@ -6497,12 +6497,59 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     }
     
 #if !DISABLE_TAILCALL_OPTIMIZTIONS
+    
+    
+    // 
+    // First check the `execute_tlb` to see if we can simply grab the physical address.
+    // @cleanup: we could potentially get rid of a couple instruction by assuming array_count(tlb.entries) == 0x1000.
+    // 
+    
+    //     mov rcx, NONVOL_rip
+    //     shr rcx, 12
+    //     mov rax, rcx
+    //     and ecx, array_count(tlb.entries)-1
+    //     lea ecx, [sizeof(tlb_entry)/8 * rcx]
+    //     lea rcx, [context + 8 * rcx + offset_of(context, tlb)]
+    //     cmp [rcx + .virtual_page_number], rax
+    //     jnz .slow_path
+    // 
+    //     mov rax, [rcx + .host_page_address]
+    //     sub rax, [context + .physical_memory]
+    //     mov rcx, NONVOL_rip
+    //     and rcx, 0xfff
+    //     add rax, rcx
+    //     jmp patchable_exit
+    static_assert(sizeof(struct translation_lookaside_buffer_entry) == 0x18);
+    static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0);
+    
+    emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
+    emit_inst(0xC1, reg(8, /*SHR*/5, REGISTER_C), 12);
+    emit_inst(0x8B, reg(8, REGISTER_A, REGISTER_C));
+    emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(array_count(context->execute_tlb.entries) - 1);
+    emit_inst(0x8D, sib(4, MOD_REGM, REGISTER_C, /*log(2)*/1, REGISTER_C, REGISTER_C));
+    emit_inst(0x8D, sib(8, MOD_REGM_OFF32, REGISTER_C, /*log(8)*/3, REGISTER_C, NONVOL_context)); emit32(offset_in_type(struct context, execute_tlb.entries));
+    emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C));
+    emit(0x75); u8 *slow_path = emit_get_current(context); emit(0);
+    
+    emit_inst(0x8B, regm8(8, REGISTER_A, REGISTER_C), (u8)offset_in_type(struct translation_lookaside_buffer_entry, host_page_address));
+    emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
+    emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(0xfff);
+    
+    emit_inst(0x2B, regm8(8, REGISTER_A, NONVOL_context)); emit(offset_in_type(struct context, physical_memory));
+    emit_inst(0x03, reg(8, REGISTER_A, REGISTER_C));
+    
+    emit(0xEB); u8 *success = emit_get_current(context); emit(0);
+    
+    *slow_path = (u8)(emit_get_current(context) - (slow_path + 1));
+    
     // First attempt, simply translate NONVOL_rip to physical and then emit a patchable jit entry.
     //     translate_rip_to_physical(context, NONVOL_rip, PERMISSION_execute)
     emit_inst(0x8B, reg(8, ARG_REG_1, NONVOL_context));
     emit_inst(0x8B, reg(8, ARG_REG_2, NONVOL_rip));
     emit_inst(0xC7, reg(8, /*mov*/0, ARG_REG_3)); emit32(PERMISSION_execute);
     emit_call_to_helper(context, translate_rip_to_physical, HELPER_simple_call);
+    
+    *success = (u8)(emit_get_current(context) - (success + 1));
     
     emit_patchable_jit_exit(context, host(REGISTER_A));
 #else
