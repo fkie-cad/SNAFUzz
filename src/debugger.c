@@ -657,8 +657,6 @@ u64 parse_address(struct context *context, struct string *line, int *error){
     return address;
 }
 
-void update_exception_exit_bitmap(struct context *context);
-
 void parse_breakpoint(struct context *context, enum breakpoint_type type, struct string *line){
     int error = 0;
     u64 address = parse_address(context, line, &error);
@@ -741,8 +739,6 @@ void print_registers(struct context *context, FILE *file){
     
     if(mode & PRINT_symbol){
         struct loaded_module *module = get_module_for_address(registers->rip);
-        
-        // if(!module || !string_match(module->short_name, string("mstscax"))) return;
         
         if(module){
             print_symbol_from_loaded_module(context, module, registers->rip, file);
@@ -4328,12 +4324,7 @@ void handle_debugger(struct context *context){
     
     if(globals.print_trace) globals.single_stepping = 1;
     
-    if(context->use_hypervisor){
-        
-        // To reduce the amount of Vmexits we have to perform, we update the exception bitmap to not 
-        // only include breakpoints when we are not single stepping.
-        update_exception_exit_bitmap(context);
-    }else{
+    if(!context->use_hypervisor){
         // If the breakpoint we are currently at did not change, skip it when we get back to it!
         // This is our hacky implementation of the RF flag.
         if(globals.breakpoint_hit_index >= 0 && memcmp(&breakpoint_hit, &globals.breakpoints[globals.breakpoint_hit_index], sizeof(breakpoint_hit)) == 0){

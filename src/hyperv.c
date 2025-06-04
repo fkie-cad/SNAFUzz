@@ -1450,6 +1450,11 @@ void start_execution_hypervisor(struct context *context){
                         }
                     }else{
                         handle_debugger(context);
+                        
+                        // To reduce the amount of Vmexits we have to perform, we update the exception bitmap to not 
+                        // only include breakpoints when we are not single stepping.
+                        update_exception_exit_bitmap(context);
+                        
                         if(globals.single_stepping) hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
                     }
                     

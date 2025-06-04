@@ -19,8 +19,6 @@ void hypervisor_pend_interrupt(struct context *context, struct registers *regist
 }
 
 
-void update_exception_exit_bitmap(struct context *context){ }
-
 void kvmb_user_signal(int sig){}
 
 void start_execution_hypervisor(struct context *context){
