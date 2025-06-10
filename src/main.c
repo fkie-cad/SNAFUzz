@@ -620,6 +620,7 @@ struct globals{
         u64 length;
     } breakpoints[0x10]; // Last breakpoint never used, so we can have this be 'BREAKPOINT_none' terminated.
     
+    s32 breakpoint_count;
     s32 breakpoint_hit_index;
     u32 single_stepping;
     u32 print_trace;

@@ -63,6 +63,8 @@ int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum brea
     globals.breakpoints[breakpoint_index].address = address;
     globals.breakpoints[breakpoint_index].length  = length;
     
+    globals.breakpoint_count += 1;
+    
     if(!(flags & BREAKPOINT_FLAG_oneshot)){
         print("Defined breakpoint %x: %c at %p\n", breakpoint_index, breakpoint_type_to_string[type][0], address);
     }
@@ -75,6 +77,8 @@ void clear_breakpoint(int breakpoint_index){
     
     if(globals.breakpoints[breakpoint_index].type == BREAKPOINT_none) return;
     
+    globals.breakpoint_count -= 1;
+    
     globals.breakpoints[breakpoint_index].type = BREAKPOINT_none;
     if(!(globals.breakpoints[breakpoint_index].flags & BREAKPOINT_FLAG_oneshot)){
         print("Breakpoint %x cleared\n", breakpoint_index);
@@ -82,6 +86,8 @@ void clear_breakpoint(int breakpoint_index){
 }
 
 int check_breakpoint(enum breakpoint_type type, u64 address_start, u64 size){
+    
+    if(globals.breakpoint_count == 0) return 0;
     
     u64 address_end = address_start + size;
     

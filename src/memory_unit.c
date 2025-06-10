@@ -440,7 +440,6 @@ u64 translate_page_number_to_physical(struct context *context, u64 page_number, 
 
 u64 translate_rip_to_physical(struct context *context, u64 address, enum permissions permissions){
     
-    
     u64 offset = address & 0xfff;
     u64 page_number = address >> 12;
     
@@ -500,7 +499,7 @@ int guest_read_size(struct context *context, void *_buffer, u64 address, u64 siz
     // 
     int do_not_save_translated_address_in_tlb = (required_permissions == PERMISSION_none) || context->skip_setting_permission_bits;
     
-    if(globals.debugger_mode){
+    if(globals.debugger_mode && globals.breakpoint_count != 0){
         
         // @note: The breakpoint type needs to match the tlb we are using, 
         //        otherwise we could populate the write_tlb even though there is a write breakpoint there.
@@ -644,7 +643,7 @@ int guest_write_size(struct context *context, void *_buffer, u64 address, u64 si
     // 
     int do_not_save_translated_address_in_tlb = context->skip_setting_permission_bits;
     
-    if(globals.debugger_mode){
+    if(globals.debugger_mode && globals.breakpoint_count != 0){
         if(context->jit_skip_one_breakpoint){
             // Makes sure we enter this function on any write of this page.
             if(check_breakpoint(BREAKPOINT_write, (address & ~0xfff), 0x1000)) do_not_save_translated_address_in_tlb = 1;
@@ -862,5 +861,4 @@ static u32 prefetch_instruction(struct context *context, u64 address, u8 *instru
     
     return size_read_from_first_page + size_read_from_second_page;
 }
-
 

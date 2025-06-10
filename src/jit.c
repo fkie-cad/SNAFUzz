@@ -1379,7 +1379,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
         // 
         is_terminating_instruction = globals.single_stepping;
         
-        if(globals.debugger_mode){
+        if(globals.debugger_mode && globals.breakpoint_count != 0){
             for(u32 breakpoint_index = 0; breakpoint_index < array_count(globals.breakpoints); breakpoint_index++){
                 struct breakpoint breakpoint = globals.breakpoints[breakpoint_index];
                 if(breakpoint.type != BREAKPOINT_execute) continue;
