@@ -394,7 +394,7 @@ struct context{
         // The jit entry, only call this if you want to enter the jit! 
         // This is called from 'start_execution_jit'.
         //
-        struct patchable_jit_exit *(*jit_entry)(struct context *context, struct registers *registers, struct instruction_cache_entry *instruction_cache_entry);
+        u8 *(*jit_entry)(struct context *context, struct registers *registers, struct instruction_cache_entry *instruction_cache_entry);
         
         //
         // The 'jit_exit' undoes the stack frame created by 'jit_entry'.
@@ -410,6 +410,7 @@ struct context{
         
         u8 *jit_guest_read_wrappers[2 * 6]; // 2 - needs write permission {0, 1}, 6 - size {1, 2, 4, 8, 16, 32}
         u8 *jit_guest_write_wrappers[6];    // 6 - size {1, 2, 4, 8, 16, 32}
+        u8 *jit_translate_rip_to_physical;
         
         struct{
             u64 maximal_size_minus_one;
@@ -1633,7 +1634,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
     
     // Some of this JIT stuff does not have to be initialized in snapshot mode.
     // But we will just initialize it anyway.
-    struct context *context = malloc(sizeof(*context));
+    struct context *context = os_allocate_memory(sizeof(*context));
     globals.main_thread_context = context;
     context_initialize_main_and_thread_context_common(context);
     context->thread_index = -1;

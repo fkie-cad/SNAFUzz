@@ -53,7 +53,7 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 
 // If during fuzzing we encounter the situation where we would write to a page, which was previously executed, 
 // we produce an internal error. Otherwise, we would have to reset the JIT, which might degrade performance, if it happens often.
-#define CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING 0
+#define CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING 1
 
 #define HOOK_TABLE_SIZE  0x100
 #define CRASH_TABLE_SIZE 0x1000
@@ -79,7 +79,10 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 
 #define DISABLE_JIT_TLB 0
 
-#define DISABLE_TAILCALL_OPTIMIZTIONS 1
+#define DISABLE_TAILCALL_OPTIMIZTIONS 0
+
+#define DISABLE_BRANCH_COVERAGE 0
+
 
 //_____________________________________________________________________________________________________________________
 // Hypervisor options

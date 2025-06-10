@@ -270,6 +270,9 @@ void initialize_jit(struct context *context){
         // Reinitialize the 'jit_pool'.
         // 
         context->jit_pool.current = context->jit_pool.base;
+        
+        // We should not reset the jit if this option is true.
+        assert(!(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing));
     }else{   
         //
         // Initialize the 'jit_pool'.
@@ -690,6 +693,83 @@ void initialize_jit(struct context *context){
         emit(0xc3);
     }
     
+    
+    {   //
+        // Initialize the `jit_translate_rip_to_physical` jit call.
+        // 
+        context->jit_translate_rip_to_physical = emit_get_current(context);
+        
+        // 
+        // First check the `execute_tlb` to see if we can simply grab the physical address.
+        // @cleanup: we could potentially get rid of a couple instruction by assuming array_count(tlb.entries) == 0x1000.
+        // 
+        
+        //     mov rcx, NONVOL_rip
+        //     shr rcx, 12
+        //     mov rax, rcx
+        //     and ecx, array_count(tlb.entries)-1
+        //     lea ecx, [sizeof(tlb_entry)/8 * rcx]
+        //     lea rcx, [context + 8 * rcx + offset_of(context, tlb)]
+        //     cmp [rcx + .virtual_page_number], rax
+        //     jnz .slow_path
+        // 
+        //     mov rax, [rcx + .host_page_address]
+        //     sub rax, [context + .physical_memory]
+        //     mov rcx, NONVOL_rip
+        //     and rcx, 0xfff
+        //     add rax, rcx
+        //     jmp patchable_exit
+        static_assert(sizeof(struct translation_lookaside_buffer_entry) == 0x18);
+        static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0);
+        
+        emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
+        emit_inst(0xC1, reg(8, /*SHR*/5, REGISTER_C), 12);
+        emit_inst(0x8B, reg(8, REGISTER_A, REGISTER_C));
+        emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(array_count(context->execute_tlb.entries) - 1);
+        emit_inst(0x8D, sib(4, MOD_REGM, REGISTER_C, /*log(2)*/1, REGISTER_C, REGISTER_C));
+        emit_inst(0x8D, sib(8, MOD_REGM_OFF32, REGISTER_C, /*log(8)*/3, REGISTER_C, NONVOL_context)); emit32(offset_in_type(struct context, execute_tlb.entries));
+        emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C));
+        emit(0x75); u8 *slow_path = emit_get_current(context); emit(0);
+        
+        emit_inst(0x8B, regm8(8, REGISTER_A, REGISTER_C), (u8)offset_in_type(struct translation_lookaside_buffer_entry, host_page_address));
+        emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
+        emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(0xfff);
+        
+        emit_inst(0x2B, regm8(8, REGISTER_A, NONVOL_context)); emit(offset_in_type(struct context, physical_memory));
+        emit_inst(0x03, reg(8, REGISTER_A, REGISTER_C));
+        
+        emit(0xc3);
+        
+        *slow_path = (u8)(emit_get_current(context) - (slow_path + 1));
+        
+        // 
+        // We need a _stack frame_ as we needs shadow space for the argument registers.
+        //    sub rsp, 0x28
+        emit(0x48, 0x83, 0xEC, 0x28);
+        
+        
+        // First attempt, simply translate NONVOL_rip to physical and then emit a patchable jit entry.
+        //     translate_rip_to_physical(context, NONVOL_rip, PERMISSION_execute)
+        emit_inst(0x8B, reg(8, ARG_REG_1, NONVOL_context));
+        emit_inst(0x8B, reg(8, ARG_REG_2, NONVOL_rip));
+        emit_inst(0xC7, reg(8, /*mov*/0, ARG_REG_3)); emit32(PERMISSION_execute);
+        
+        // Call translate_rip_to_physical.
+        //     mov rax, helper
+        //     call rax
+        emit(0x48, 0xB8); emit64((u64)translate_rip_to_physical);
+        emit_inst(0xff, reg(4, /*call*/2, REGISTER_A));
+        
+        
+        // success:
+        //    add rsp, 0x28
+        //    ret
+        
+        emit(0x48, 0x83, 0xC4, 0x28);
+        emit(0xc3);
+    }
+    
+    
     {   //
         // Initialize the 'jit_entry'. The 'jit_entry' is here to establish a stack frame and jump to the first instruction.
         //
@@ -1061,6 +1141,8 @@ void emit_read_into_temp_buffer_and_return_pointer_in_rax(struct context *contex
     u8 *destination = context->jit_guest_read_wrappers[jit_guest_read_wrapper_index];
     assert(destination);
     
+    // call off(rip, guest_read_wrapper)
+    
     u8 *current_rip = emit_get_current(context) + 5;
     s64 offset = destination - current_rip;
     assert((s32)offset == offset);
@@ -1278,6 +1360,12 @@ void emit_push_pop_fpu_stack(struct context *context, int is_push){
 
 #if !DISABLE_TAILCALL_OPTIMIZTIONS
 
+enum branch_information{
+    BRANCH_unconditional,
+    BRANCH_taken,
+    BRANCH_not_taken,
+};
+
 #pragma pack(push,1)
 
 struct patchable_jit_exit{
@@ -1294,13 +1382,21 @@ struct patchable_jit_exit{
     u8 movabs[2]; u64 saved_physical;
     u8 cmp[3];
     u8 jz[2];  u32 success;
-    u8 lea[3]; u32 lea_offset;
-    u8 jmp;    u32 jit_exit;
 };
 
 #pragma pack(pop)
 
-void emit_patchable_jit_exit(struct context *context, struct host_register physical_address){
+void emit_patchable_jit_exit(struct context *context, u64 branch_rip, enum branch_information branch_information){
+    
+    // call jit_translate_rip_to_physical @cleanup: there is a slight optimization here, where we patch this as well.
+    {
+        u8 *current_rip = emit_get_current(context) + 5;
+        s64 offset = context->jit_translate_rip_to_physical - current_rip;
+        assert((s32)offset == offset);
+        emit(0xE8); emit32((s32)offset);
+    }
+    
+    struct host_register physical_address = {REGISTER_A};
     
     assert(physical_address.encoding < 8);
     
@@ -1312,12 +1408,62 @@ void emit_patchable_jit_exit(struct context *context, struct host_register physi
     
     emit_inst(0x3B, reg(8, saved_physical_reg, physical_address.encoding));
     emit(0x0f, 0x84); emit32(0);
-    emit(0x48, 0x8D, 0x05); emit32((u32)-offset_in_type(struct patchable_jit_exit, jmp));
+    
+#if !DISABLE_BRANCH_COVERAGE
+    if(branch_information != BRANCH_unconditional){
+        // Mark the branch as being taken.
+        //     mov arg1, NONVOL_context
+        //     (arg2 already contains the current 'rip')
+        //     mov arg3, 1 ; taken
+        //     mov rax, 
+        emit_inst(0x8b, reg(8, ARG_REG_1,  NONVOL_context));
+        emit(0x48, (u8)(0xb8 + ARG_REG_2)); emit64(branch_rip);
+        emit_inst(0xC7, reg(4, /*mov*/0, ARG_REG_3)); emit32(branch_information == BRANCH_taken);
+        emit(0x48, 0xB8); emit64((u64)update_coverage_table_for_conditional_branch);
+        emit(0xff, make_modrm(MOD_REG, /*call*/2, REGISTER_A));
+    }
+#endif
+    
+    emit(0x48, 0x8D, 0x05); emit32((u32)(start - (emit_get_current(context) + 4)));
     
     u32 exit_patch = (s32)((context->jit_exit + /*sizeof(xor eax, eax)*/2) - (emit_get_current(context) + 5));
     emit(0xe9); emit32(exit_patch);
     
-    assert((emit_get_current(context) - start) == sizeof(struct patchable_jit_exit));
+}
+
+
+#pragma pack(push,1)
+
+struct patchable_jit_exit_for_jump_within_page{
+    u8 jmp1; u32 rel32;
+};
+
+
+#pragma pack(pop)
+
+void emit_patchable_jit_exit_for_jump_within_page(struct context *context, u64 branch_rip, enum branch_information branch_information){
+    
+    u8 *start = emit_get_current(context);
+    
+    emit(0xe9); emit32(0);
+    
+#if !DISABLE_BRANCH_COVERAGE
+    if(branch_information != BRANCH_unconditional){
+        // Mark the branch as being taken.
+        //     mov arg1, NONVOL_context
+        //     (arg2 already contains the current 'rip')
+        //     mov arg3, 1 ; taken
+        emit_inst(0x8b, reg(8, ARG_REG_1,  NONVOL_context));
+        emit(0x48, (u8)(0xb8 + ARG_REG_2)); emit64(branch_rip);
+        emit_inst(0xC7, reg(4, /*mov*/0, ARG_REG_3)); emit32(branch_information == BRANCH_taken);
+        emit(0x48, 0xB8); emit64((u64)update_coverage_table_for_conditional_branch);
+        emit(0xff, make_modrm(MOD_REG, /*call*/2, REGISTER_A));
+    }
+#endif
+    
+    emit(0x48, 0x8D, 0x05); emit32((u32)(start - (emit_get_current(context) + 4)));
+    u32 exit_patch = (s32)((context->jit_exit + /*sizeof(xor eax, eax)*/2) - (emit_get_current(context) + 5));
+    emit(0xe9); emit32(exit_patch);
 }
 
 #endif
@@ -1368,6 +1514,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     
     int had_page_boundary = 0;
     int should_check_for_interrupts = 0;
+    int skip_jit_exit = 0;
     
     while(!is_terminating_instruction && (instruction_rip - initial_rip) < 0xf00){
         
@@ -1404,6 +1551,17 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                     // mov [context + .jit_skip_one_breakpoint], 0
                     // emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
                 }
+            }
+            
+            if(context->jit_skip_one_breakpoint && instruction_rip == initial_rip){
+                // Reset the 'jit_skip_one_breakpoint' only after the first instruction 
+                // of the first block has been executed.
+                // Future blocks will not go into this code path, as we will first execute this block
+                // and hence the value will be reset.
+                // 
+                //      mov [context + .jit_skip_one_breakpoint], 0
+                //      
+                emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
             }
         }
         
@@ -1681,12 +1839,19 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             
             // 
             // Check if the instruction matches what we expect.
+            // If it matches, we can continue. If it matches `-1` meaning the address is not paged in, return a CRASH_execute.
+            // Otherwise, our jit is wrong and we need to reset.
             // 
             //     mov rcx, instruction_rip + instruction_size
             //     cmp rax, rcx
             //     je .continue
             // 
-            //     mov [context + .crash], CRASH_reset_jit
+            //     mov rdx, CRASH_reset_jit
+            //     mov rcx, CRASH_execute
+            //     add rax, 1
+            //     cmovz rdx, rcx
+            //     
+            //     mov [context + .crash], rdx
             //     jmp [context->jit_exit]
             //     
             // .continue:
@@ -1697,7 +1862,12 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             emit_inst(0x3B, reg(8, REGISTER_A, REGISTER_C));
             emit(0x74); u8 *continue_patch = emit_get_current(context); emit(0);
             
-            emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, crash)); emit32(CRASH_reset_jit);
+            emit(0xC7, make_modrm(MOD_REG, 0, REGISTER_D)); emit32(CRASH_reset_jit);
+            emit(0xC7, make_modrm(MOD_REG, 0, REGISTER_C)); emit32(CRASH_execute);
+            emit_inst(0x83, reg(8, REG_OPCODE_add, REGISTER_A), 1);
+            emit_inst((0x0f, 0x44), reg(8, REGISTER_D, REGISTER_C));
+            
+            emit_inst(0x89, regm32(8, REGISTER_D, NONVOL_context)); emit32(offset_in_type(struct context, crash));
             emit(0xff, make_modrm(MOD_REGM_OFF32, 4, NONVOL_context)); emit32(offset_in_type(struct context, jit_exit));
             
             // .continue:
@@ -1770,6 +1940,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
         
         u8 *jump_patch = null;
         int is_unconditional_jump = false;
+        u64 conditional_branch_rip = 0;
         
         switch(augmented_opcode){
             //
@@ -2177,17 +2348,15 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 emit_load_flags(context);
                 
                 // jcc failure
-                emit(jcc_opcode ^ 1); u8 *failure_patch = emit_get_current(context); emit(0);
+                emit(jcc_opcode ^ 1); jump_patch = emit_get_current(context); emit(0);
                 {
                     // mov arg1, nonvol_rip
                     emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_rip));
                     
-                    // Save the current 'rip' for branch coverage below.
-                    //     mov arg2, arg1
-                    emit_inst(0x8b, reg(8, ARG_REG_2, ARG_REG_1));
-                    
                     if(opcode < 0x80){
                         s32 disp = instruction_size + (s32)imm8;
+                        
+                        conditional_branch_rip = instruction_rip + disp;
                         
                         // add arg1, disp + instruction_size
                         emit_inst(0x81, reg(8, REG_OPCODE_add, ARG_REG_1)); emit32(disp);
@@ -2197,49 +2366,16 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                         
                         // add arg1, disp32
                         emit_inst(0x81, reg(8, REG_OPCODE_add, ARG_REG_1)); emit32((s32)immediate);
+                        
+                        conditional_branch_rip = instruction_rip + (s32)immediate + (u64)instruction_size;
                     }
                     
                     // @cleanup: Maybe there are two unnecessary instructions here.
                     // mov nonvol_rip, arg1
                     emit_inst(0x8b, reg(8, NONVOL_rip, ARG_REG_1));
                     
-                    // 
-                    // Mark the branch as being taken.
-                    //     mov arg1, NONVOL_context
-                    //     (arg2 already contains the current 'rip')
-                    //     mov arg3, 1 ; taken
-                    emit_inst(0x8b, reg(8, ARG_REG_1,  NONVOL_context));
-                    emit_inst(0xC7, reg(4, /*mov*/0, ARG_REG_3)); emit32(1);
-                    
-                    //     mov  rax, update_coverage_table_for_conditional_branch
-                    //     call rax
-                    emit(0x48, 0xB8); emit64((u64)update_coverage_table_for_conditional_branch);
-                    emit(0xff, make_modrm(MOD_REG, /*call*/2, REGISTER_A));
-                    
-                    emit(0xEB); jump_patch = emit_get_current(context); emit(0);
-                }
-                // failure:
-                *failure_patch = (u8)(emit_get_current(context) - (failure_patch + 1));
-                
-                if(opcode >= 0x80){
-                    // 
-                    // We have space to also mark a branch as not-taken.
-                    //     mov arg1, NONVOL_context
-                    //     mov arg2, NONVOL_rip
-                    //     xor arg3, arg3 ; not taken
-                    emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_context));
-                    emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_rip));
-                    emit_inst(0x31, reg(8, ARG_REG_3, ARG_REG_3));
-                    
-                    //     mov  rax, update_coverage_table_for_conditional_branch
-                    //     call rax
-                    emit(0x48, 0xB8); emit64((u64)update_coverage_table_for_conditional_branch);
-                    emit(0xff, make_modrm(MOD_REG, /*call*/2, REGISTER_A));
                 }
                 
-                //
-                // @note: Just use the usual next_instruction path to perform the jump.
-                //
             }break;
             
             case 0xe3:{ // JRCXZ - jump short if RCX is zero.
@@ -2249,11 +2385,12 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 emit_read_gpr(context, host(REGISTER_C), guest(REGISTER_C), 8, 0);
                 
                 emit(0xe3); emit(0x02);
-                emit(0xEB); u8 *non_zero_patch = emit_get_current(context); emit(0);
+                emit(0xEB); jump_patch = emit_get_current(context); emit(0);
                 
                 // mov rcx, nonvol_rip
                 emit_inst(0x8b, reg(8, REGISTER_C, NONVOL_rip));
                 s32 disp = instruction_size + (s32)imm8;
+                conditional_branch_rip = instruction_rip + disp;
                 
                 // add rcx, disp + instruction_size
                 emit_inst(0x81, reg(8, REG_OPCODE_add, REGISTER_C)); emit32(disp);
@@ -2262,9 +2399,6 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 // mov nonvol_rip, rcx
                 emit_inst(0x8b, reg(8, NONVOL_rip, REGISTER_C));
                 
-                emit(0xEB); jump_patch = emit_get_current(context); emit(0);
-                
-                *non_zero_patch = (u8)(emit_get_current(context) - (non_zero_patch + 1));
             }break;
             
             // op = { add, or, adc, sbb, and, sub, xor, cmp }
@@ -3677,12 +3811,14 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 emit(0x48, 0xFF, 0xC9); 
                 emit_write_gpr(context, guest(REGISTER_C), host(REGISTER_C), 8, 0);
                 
-                emit(0x74); u8 *failure_patch = emit_get_current(context); emit(0);
+                emit(0x74); jump_patch = emit_get_current(context); emit(0);
                 {
                     // mov rcx, nonvol_rip
                     emit(0x48 | REXB, 0x8b, make_modrm(MOD_REG, REGISTER_C, NONVOL_rip));
                     
                     s32 disp = instruction_size + (s32)imm8;
+                    conditional_branch_rip = instruction_rip + disp;
+                    
                     // add rcx, disp + instruction_size
                     emit(0x48, 0x81, make_modrm(MOD_REG, REG_OPCODE_add, REGISTER_C));
                     emit32(disp);
@@ -3691,10 +3827,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                     // mov nonvol_rip, rcx
                     emit(0x48 | REXR, 0x8b, make_modrm(MOD_REG, NONVOL_rip, REGISTER_C));
                     
-                    emit(0xEB); jump_patch = emit_get_current(context); emit(0);
                 }
-                // failure:
-                *failure_patch = (u8)(emit_get_current(context) - (failure_patch + 1));
                 
                 //
                 // @note: Just use the usual next_instruction path to perform the jump.
@@ -3745,8 +3878,12 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             case 0xE9:  // jmp rel32
             case 0xEB:{ // jmp rel8
                 
+                u64 next_instruction;
+                
                 if(opcode == 0xEB){
                     s32 disp = instruction_size + (s32)imm8;
+                    
+                    next_instruction = instruction_rip + disp;
                     
                     // add nonvol_rip, disp + instruction_size
                     emit(0x48 | REXB, 0x81, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip)); emit32(disp);
@@ -3757,6 +3894,13 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                     
                     // add nonvol_rip, disp + instruction_size
                     emit(0x48 | REXB, 0x81, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip)); emit32((s32)immediate);
+                    
+                    next_instruction = instruction_rip + (s32)immediate + (u64)instruction_size;
+                }
+                
+                if((instruction_rip & ~0xfff) == (next_instruction & ~0xfff)){
+                    emit_patchable_jit_exit_for_jump_within_page(context, 0, BRANCH_unconditional);
+                    skip_jit_exit = 1;
                 }
                 
                 is_unconditional_jump = 1;
@@ -6430,14 +6574,43 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             }break;
         }
         
-        if(!is_unconditional_jump){
+        if(jump_patch){
+            
+            assert(conditional_branch_rip);
+            
+            if((instruction_rip & ~0xfff) == (conditional_branch_rip & ~0xfff)){
+                emit_patchable_jit_exit_for_jump_within_page(context, instruction_rip, BRANCH_taken);
+            }else{
+                emit_patchable_jit_exit(context, instruction_rip, BRANCH_taken);
+            }
+            
+            u8 *end = emit_get_current(context);
+            u8 *start = jump_patch + 1;
+            assert((s8)(end - start) == end - start);
+            *jump_patch = (s8)(end - start);
+            
+            // 
+            // We ended in a conditional jump. Conditional jumps are always rip-relative.
+            // 
+            //    add nonvol_rip, imm8
+            emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
+            
+            if((instruction_rip & ~0xfff) == ((instruction_rip + instruction_size) & ~0xfff)){
+                emit_patchable_jit_exit_for_jump_within_page(context, instruction_rip, BRANCH_not_taken);
+            }else{
+                emit_patchable_jit_exit(context, instruction_rip, BRANCH_not_taken);
+            }
+            
+            skip_jit_exit = 1;
+            is_terminating_instruction = 1;
+        }else if(is_unconditional_jump){
+            is_terminating_instruction = 1;
+        }else{
             //
             // Update the rip, and jump to the next instruction.
             //
             //    add nonvol_rip, imm8
             emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
-        }else{
-            is_terminating_instruction = 1;
         }
         
         if(should_check_for_interrupts){
@@ -6463,26 +6636,6 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             is_terminating_instruction = 0;
         }
         
-        if(jump_patch){
-            u8 *end = emit_get_current(context);
-            u8 *start = jump_patch + 1;
-            
-            assert((s8)(end - start) == end - start);
-            
-            *jump_patch = (s8)(end - start);
-            is_terminating_instruction = 1;
-        }
-        
-        if(context->jit_skip_one_breakpoint && instruction_rip == initial_rip){
-            // Reset the 'jit_skip_one_breakpoint' only after the first instruction 
-            // of the first block has been executed.
-            // Future blocks will not go into this code path, as we will first execute this block
-            // and hence the value will be reset.
-            // 
-            //      mov [context + .jit_skip_one_breakpoint], 0
-            //      
-            emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
-        }
         
         instruction_rip += instruction_size;
         
@@ -6498,60 +6651,10 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     
 #if !DISABLE_TAILCALL_OPTIMIZTIONS
     
+    if(!skip_jit_exit){
+        emit_patchable_jit_exit(context, 0, BRANCH_unconditional);
+    }
     
-    // 
-    // First check the `execute_tlb` to see if we can simply grab the physical address.
-    // @cleanup: we could potentially get rid of a couple instruction by assuming array_count(tlb.entries) == 0x1000.
-    // 
-    
-    //     mov rcx, NONVOL_rip
-    //     shr rcx, 12
-    //     mov rax, rcx
-    //     and ecx, array_count(tlb.entries)-1
-    //     lea ecx, [sizeof(tlb_entry)/8 * rcx]
-    //     lea rcx, [context + 8 * rcx + offset_of(context, tlb)]
-    //     cmp [rcx + .virtual_page_number], rax
-    //     jnz .slow_path
-    // 
-    //     mov rax, [rcx + .host_page_address]
-    //     sub rax, [context + .physical_memory]
-    //     mov rcx, NONVOL_rip
-    //     and rcx, 0xfff
-    //     add rax, rcx
-    //     jmp patchable_exit
-    static_assert(sizeof(struct translation_lookaside_buffer_entry) == 0x18);
-    static_assert(offset_in_type(struct translation_lookaside_buffer_entry, virtual_page_number) == 0);
-    
-    emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
-    emit_inst(0xC1, reg(8, /*SHR*/5, REGISTER_C), 12);
-    emit_inst(0x8B, reg(8, REGISTER_A, REGISTER_C));
-    emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(array_count(context->execute_tlb.entries) - 1);
-    emit_inst(0x8D, sib(4, MOD_REGM, REGISTER_C, /*log(2)*/1, REGISTER_C, REGISTER_C));
-    emit_inst(0x8D, sib(8, MOD_REGM_OFF32, REGISTER_C, /*log(8)*/3, REGISTER_C, NONVOL_context)); emit32(offset_in_type(struct context, execute_tlb.entries));
-    emit_inst(0x3B, regm(8, REGISTER_A, REGISTER_C));
-    emit(0x75); u8 *slow_path = emit_get_current(context); emit(0);
-    
-    emit_inst(0x8B, regm8(8, REGISTER_A, REGISTER_C), (u8)offset_in_type(struct translation_lookaside_buffer_entry, host_page_address));
-    emit_inst(0x8B, reg(8, REGISTER_C, NONVOL_rip));
-    emit_inst(0x81, reg(4, REG_OPCODE_and, REGISTER_C)); emit32(0xfff);
-    
-    emit_inst(0x2B, regm8(8, REGISTER_A, NONVOL_context)); emit(offset_in_type(struct context, physical_memory));
-    emit_inst(0x03, reg(8, REGISTER_A, REGISTER_C));
-    
-    emit(0xEB); u8 *success = emit_get_current(context); emit(0);
-    
-    *slow_path = (u8)(emit_get_current(context) - (slow_path + 1));
-    
-    // First attempt, simply translate NONVOL_rip to physical and then emit a patchable jit entry.
-    //     translate_rip_to_physical(context, NONVOL_rip, PERMISSION_execute)
-    emit_inst(0x8B, reg(8, ARG_REG_1, NONVOL_context));
-    emit_inst(0x8B, reg(8, ARG_REG_2, NONVOL_rip));
-    emit_inst(0xC7, reg(8, /*mov*/0, ARG_REG_3)); emit32(PERMISSION_execute);
-    emit_call_to_helper(context, translate_rip_to_physical, HELPER_simple_call);
-    
-    *success = (u8)(emit_get_current(context) - (success + 1));
-    
-    emit_patchable_jit_exit(context, host(REGISTER_A));
 #else
     // exit_jit:
     // jmp context->jit_exit
@@ -6637,37 +6740,36 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
         _bittestandset((void *)context->physical_memory_executed, (u32)(physical_second_page/0x1000)); // set the bit to indicate we have executed this page.
     }
     
-#if 0
     
-    for(u64 address = instruction_rip; address < emit_jit_result.block_end_rip; ){
-        u8 instruction[16];
-        prefetch_instruction(context, address, instruction, sizeof(instruction));
-        
-        print("%p: ", address);
-        u32 instruction_size = print_disassembly_for_buffer(0, instruction_rip, instruction, 16);
-        
-        print("   (raw: ");
-        for(u32 i = 0; i < instruction_size; i++){
-            print("%2.2x ", instruction[i]);
+    if(0){
+        for(u64 address = instruction_rip; address < emit_jit_result.block_end_rip; ){
+            u8 instruction[16];
+            prefetch_instruction(context, address, instruction, sizeof(instruction));
+            
+            print("%p: ", address);
+            u32 instruction_size = print_disassembly_for_buffer(0, instruction_rip, instruction, 16);
+            
+            print("   (raw: ");
+            for(u32 i = 0; i < instruction_size; i++){
+                print("%2.2x ", instruction[i]);
+            }
+            print(")\n");
+            
+            address += instruction_size;
         }
-        print(")\n");
         
-        address += instruction_size;
+        u8 *end = emit_get_current(context);
+        
+        print("Generated jit:\n");
+        for(u8 *at = emit_jit_result.jit_code; at < end; ){
+            print("    ");
+            smm size = end - emit_jit_result.jit_code;
+            at += print_disassembly_for_buffer(0, instruction_rip, at, (u32)size);
+            print("\n");
+        }
+        
+        print("%p\n", physical_rip);
     }
-    
-    u8 *end = emit_get_current(context);
-    
-    print("Generated jit:\n");
-    for(u8 *at = emit_jit_result.jit_code; at < end; ){
-        print("    ");
-        smm size = end - emit_jit_result.jit_code;
-        at += print_disassembly_for_buffer(0, instruction_rip, at, (u32)size);
-        print("\n");
-    }
-    
-    print("%p %p\n", physical_rip, instruction_cache_entry->physical_second_page);
-#endif
-    
 }
 
 struct crash_information jit_execute_until_exception(struct context *context){
@@ -6679,7 +6781,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
     
     u64 last_page_index = (registers->rip >> 12);
     u64 physical_rip = translate_rip_to_physical(context, registers->rip, PERMISSION_execute);
-    struct patchable_jit_exit *patchable_jit_entry = null;
+    u8 *patchable_jit_exit_address = null;
     
     // If we get into the loop and should be single stepping, get into the debugger here.
     if(globals.print_trace){
@@ -6756,22 +6858,34 @@ struct crash_information jit_execute_until_exception(struct context *context){
         assert(context->skip_setting_permission_bits == 0);
         
 #if !DISABLE_TAILCALL_OPTIMIZTIONS
-        if(patchable_jit_entry){
-            
-            // Patch up the last entry, because we now know where it is supposed to jump.
-            patchable_jit_entry->saved_physical = physical_rip;
-            
-            u8 *jump_to   = instruction_cache_entry->instruction_jit;
-            u8 *jump_from = &patchable_jit_entry->lea[0];
-            
-            patchable_jit_entry->success = (s32)(jump_to - jump_from);
+        if(patchable_jit_exit_address){
+            if(*patchable_jit_exit_address == 0x48){
+                struct patchable_jit_exit *patchable_jit_exit = (void *)patchable_jit_exit_address;
+                
+                // Patch up the last entry, because we now know where it is supposed to jump.
+                patchable_jit_exit->saved_physical = physical_rip;
+                
+                u8 *jump_to   = instruction_cache_entry->instruction_jit;
+                u8 *jump_from = (u8 *)(patchable_jit_exit + 1);
+                
+                patchable_jit_exit->success = (s32)(jump_to - jump_from);
+            }else{
+                assert(*patchable_jit_exit_address == 0xe9);
+                
+                struct patchable_jit_exit_for_jump_within_page *patchable_jit_exit = (void *)patchable_jit_exit_address;
+                
+                u8 *jump_to   = instruction_cache_entry->instruction_jit;
+                u8 *jump_from = (u8 *)(patchable_jit_exit + 1);
+                
+                patchable_jit_exit->rel32 = (s32)(jump_to - jump_from);
+            }
         }
 #endif
         
         //
         // Enter the jit.
         // 
-        patchable_jit_entry = (*context->jit_entry)(context, registers, instruction_cache_entry);
+        patchable_jit_exit_address = (*context->jit_entry)(context, registers, instruction_cache_entry);
         
         if(globals.debugger_mode){
             
@@ -6805,17 +6919,23 @@ struct crash_information jit_execute_until_exception(struct context *context){
             // speed improvement.
             if(should_reset){
                 initialize_jit(context);
-                patchable_jit_entry = 0;
+                patchable_jit_exit_address = 0;
             }
         }
         
         if(context->crash == CRASH_reset_jit){
+            
+            if(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing){
+                set_crash_information(context, CRASH_internal_error, (u64)"Would be resetting the jit.");
+                break;
+            }
+            
             initialize_jit(context);
             context->crash = CRASH_none;
-            patchable_jit_entry = 0;
+            patchable_jit_exit_address = 0;
         }
         
-#if 1
+#if 0
         {   // Some dumb stats, this only works if there is only one thread.
             static u64 start_timeout, last_timeout;
             static double start_time;
@@ -6826,7 +6946,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
             }
             
             u64 instructions_executed = context->fuzz_case_timeout - last_timeout;
-            if(instructions_executed > 100ull * 1000 * 1000){
+            if(instructions_executed > 400ull * 1000 * 1000){
                 last_timeout = context->fuzz_case_timeout;
                 
                 double time = os_get_time_in_seconds();
