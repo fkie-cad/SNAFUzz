@@ -272,7 +272,7 @@ void initialize_jit(struct context *context){
         context->jit_pool.current = context->jit_pool.base;
         
         // We should not reset the jit if this option is true.
-        assert(!(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing));
+        assert(!(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing) || globals.debugger_mode);
     }else{   
         //
         // Initialize the 'jit_pool'.
