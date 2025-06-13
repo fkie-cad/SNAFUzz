@@ -1484,8 +1484,8 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     //
     u8 *beginning_of_the_jit = emit_get_current(context);
     
-    
-    {   // 
+    if(!DISABLE_TIMEOUTS){
+        // 
         // Check if the timeout counter hit zero.
         // 
         
@@ -1506,7 +1506,6 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
         // .continue:
         *continue_patch = (u8)(emit_get_current(context) - (continue_patch + 1));
     }
-    
     
     u64 initial_rip = instruction_rip;
     int is_terminating_instruction = 0;
@@ -1572,9 +1571,10 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             emit_call_to_helper(context, hook->hook, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_might_crash);
         }
         
-        
-        // dec NONVOL_timeout_counter
-        emit_inst(0xFF, reg(8, /*dec*/1, NONVOL_timeout_counter));
+        if(!DISABLE_TIMEOUTS){
+            // dec NONVOL_timeout_counter
+            emit_inst(0xFF, reg(8, /*dec*/1, NONVOL_timeout_counter));
+        }
         
         u8 instruction[16] = {0};
         u32 instruction_buffer_size = prefetch_instruction(context, instruction_rip, instruction, sizeof(instruction));
