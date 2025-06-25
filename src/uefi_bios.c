@@ -29,6 +29,7 @@ int _fltused;
 
 #include <intrin.h>
 
+
 #ifdef __clang__
 
 unsigned long __readcr8(void){
@@ -132,7 +133,7 @@ __declspec(noinline) void cause_vmexit(u64 code, u64 arg1, u64 arg2, u64 arg3){
     __readmsr(code);
 }
 
-void bios_log(char *string, size_t size){
+void bios_print_string(char *string, size_t size){
     if(ENABLE_BIOS_LOGGING) cause_vmexit(BIOS_log, (u64)string, size, 0);
 }
 
@@ -154,7 +155,7 @@ void bios_disk_write(u64 lba, u64 buffer_size, void *buffer){
 
 #if ENABLE_BIOS_LOGGING
 
-void log(char *format, ...){
+void bios_log(char *format, ...){
     u8 buffer[0x1000];
     
     va_list va;
@@ -162,8 +163,10 @@ void log(char *format, ...){
     int length = vsnprintf(buffer, sizeof(buffer), format, va);
     va_end(va);
     
-    bios_log(buffer, length);
+    bios_print_string(buffer, length);
 }
+
+#define log bios_log
 
 #else
 
