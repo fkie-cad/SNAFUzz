@@ -1,3 +1,18 @@
+// 
+// Hypervisor implementation based on the kvm APIs.
+// 
+// WARNING: Because I personally work on Windows the experience using kvm in snapshot mode to debug might be a lot worse.
+// 
+// This is the linux implementation for Snapshot Mode. In snapshot mode, we use a hypervisor to give the user reasonable preformance,
+// when setting up their snapshots.
+// 
+// Because of limitations in the API, the kvm-based hypervisor works differantly from the hyperv based one.
+// Instead of implementing the hyper-v features (such as timers) it uses the KVM internal implementation of them.
+// In some sense this is nice, because in this way they are probably faster and more accurate, but on the other hand,
+// they possibly behave differantly then on Windows or in the JIT.
+// 
+// 
+
 
 #include <sys/ioctl.h>
 #include <linux/kvm.h>
@@ -358,9 +373,9 @@ void start_execution_hypervisor(struct context *context){
         // But since it works now using aeois I guess i am happy for now.
         // 
         
-        u8 bitmap[0x100/8] = {0}; // Disallow all.
-        
+        u8 bitmap[0x100/8];
         memset(bitmap, 0xff, sizeof(bitmap));
+        
         bitmap[(HV_X64_MSR_EOM - 0x40000000)/8] &= ~(1u << ((HV_X64_MSR_EOM - 0x40000000)%8));
 
         struct kvm_msr_filter msr_filter = {
