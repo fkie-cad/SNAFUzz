@@ -170,6 +170,34 @@ void emit_bytes(struct context *context, u8 *bytes, u64 amount){
     emit(UNPAREN(op), modrm_##modrm, __VA_ARGS__);        \
 }
 
+//_____________________________________________________________________________________________________________________
+// VTUNE Jit profiling code
+
+#define VTUNE_JIT_PROFILING 0
+#if VTUNE_JIT_PROFILING
+#include "C:\Program Files (x86)\Intel\oneAPI\vtune\latest\sdk\include\jitprofiling.h"
+
+void vtune_jit_profiling_routine(u8 *start, u8 *end, char *format, ...){
+    if(!globals.fuzzing) return;
+    
+    va_list va;
+    va_start(va, format);
+    
+    char buffer[0x20];
+    vsnprintf(buffer, sizeof(buffer), format, va);
+    
+    va_end(va);
+    
+    iJIT_Method_Load event = {0};
+    event.method_id = iJIT_GetNewMethodID();
+    event.method_name = buffer;
+    event.method_load_address = start;
+    event.method_size = (u32)(end - start);
+    iJIT_NotifyEvent(iJVM_EVENT_TYPE_METHOD_LOAD_FINISHED, (void*)&event);
+}
+#else
+#define vtune_jit_profiling_routine(...)
+#endif
 
 enum {
     REG_OPCODE_add = 0,
@@ -514,6 +542,8 @@ void initialize_jit(struct context *context){
         *patch = (u8)(emit_get_current(context) - (patch + 1));
         emit(0x48, 0x83, 0xC4, 0x28);
         emit(0xc3);
+        
+        vtune_jit_profiling_routine(context->jit_guest_read_wrappers[size_index], emit_get_current(context), "jit: guest_read_wrappers[%d]", size_index);
     }
     
     for(u32 size_index = 0; size_index < array_count(context->jit_guest_write_wrappers); size_index++){
@@ -691,6 +721,8 @@ void initialize_jit(struct context *context){
         *patch = (u8)(emit_get_current(context) - (patch + 1));
         emit(0x48, 0x83, 0xC4, 0x28);
         emit(0xc3);
+        
+        vtune_jit_profiling_routine(context->jit_guest_write_wrappers[size_index], emit_get_current(context), "jit: guest_write_wrappers[%d]", size_index);
     }
     
     
@@ -767,6 +799,8 @@ void initialize_jit(struct context *context){
         
         emit(0x48, 0x83, 0xC4, 0x28);
         emit(0xc3);
+        
+        vtune_jit_profiling_routine(context->jit_translate_rip_to_physical, emit_get_current(context), "jit: translate_rip_to_physical");
     }
     
     
@@ -810,6 +844,8 @@ void initialize_jit(struct context *context){
         
         //    jmp [r8 + .instruction_jit]
         emit_inst(0xFF, regm8(4, /*jmp*/4, ARG_REG_3), (u8)offset_in_type(struct instruction_cache_entry, instruction_jit));
+        
+        vtune_jit_profiling_routine((void *)context->jit_entry, emit_get_current(context), "jit: jit_entry");
     }
     
     {
@@ -847,6 +883,7 @@ void initialize_jit(struct context *context){
         
         // ret
         emit(0xc3);
+        vtune_jit_profiling_routine(context->jit_exit, emit_get_current(context), "jit: jit_exit");
     }
 }
 
@@ -6660,6 +6697,19 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
     // jmp context->jit_exit
     u32 patch = (s32)(context->jit_exit - (emit_get_current(context) + 5));
     emit(0xe9);  emit32(patch);
+#endif
+    
+#if VTUNE_JIT_PROFILING
+    if(globals.fuzzing){
+        char buffer[0x100];
+        snprintf(buffer, sizeof(buffer), "block@%p\n", initial_rip);
+        iJIT_Method_Load jit = {0};
+        jit.method_id = iJIT_GetNewMethodID();
+        jit.method_name = buffer;
+        jit.method_load_address = beginning_of_the_jit;
+        jit.method_size = (u32)(emit_get_current(context) - (u8 *)jit.method_load_address);
+        iJIT_NotifyEvent(iJVM_EVENT_TYPE_METHOD_LOAD_FINISHED, (void*)&jit);
+    }
 #endif
     
     emit_jit_result.jit_code = beginning_of_the_jit;
