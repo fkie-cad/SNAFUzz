@@ -3931,9 +3931,6 @@ void handle_debugger(struct context *context){
             
             print("cr3 %p, kpcr %p, thread %p, process %p, object table %p\n", cr3, kpcr, thread, process, ObjectTable);
             
-            u64 saved_handle_information = 0;
-            s64 last_non_filled = -1;
-            
             u64 HandleTableListEntry = ObjectTable + HandleTableFlink;
             do{
                 u64 HandleTableEntry = HandleTableListEntry - HandleTableFlink;
@@ -3976,34 +3973,17 @@ void handle_debugger(struct context *context){
                         break;
                     }
                     
-                    
                     if(handle_table_entry.ObjectPointerBits){
-                        
-                        if(last_non_filled != -1){
-                            for(s64 index = last_non_filled; index < handle_index; index++){
-                                print("[0x%llx] handle info: %p\n", handle_index, handle_information);
-                            }
-                            
-                            u64 ObjectPointer = (handle_table_entry.ObjectPointerBits << 4) | (0xffffull << 48);
-                            print("[0x%llx] Object: %p handle info: %p\n", handle_index, ObjectPointer, handle_information);
-                        }else{
-                            saved_handle_information = handle_information;
-                        }
+                        u64 ObjectPointer = (handle_table_entry.ObjectPointerBits << 4) | (0xffffull << 48);
+                        print("[0x%llx] Object: %p handle info: %p\n", handle_index, ObjectPointer, handle_information);
                     }else{
-                        if(last_non_filled == -1){
-                            guest_read_size(context, &handle_table_entry, saved_handle_information, sizeof(handle_table_entry), PERMISSION_read);
-                            u64 ObjectPointer = (handle_table_entry.ObjectPointerBits << 4) | (0xffffull << 48);
-                            print("[0x%llx] Object: %p handle info: %p\n", handle_index, ObjectPointer, handle_information);
-                        }
-                        
-                        last_non_filled = handle_index;
+                        print("[0x%llx] handle info: %p\n", handle_index, handle_information);
                     }
+                    
                 }
                 
                 HandleTableListEntry = guest_read(u64, HandleTableListEntry);
             } while(HandleTableListEntry != ObjectTable && 0); // @cleanup: We oncly iterate the first one, as it seems to me that that is the top-level table and all the otherones are lower level tables referenced by it?
-            
-            print("[0x%llx]\n", last_non_filled);
             
             context->registers.cr3 = cr3;
             continue;
