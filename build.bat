@@ -1,10 +1,19 @@
 @echo off
 
+:: Build script, essentially does `cl src\uefi_bios`, `cl src\hacky_display` and `cl src\main.c`.
+:: Optionally, this build script allows passing a target file as the first argument:
+::     build.bat hevd.c
+::     build.bat C:\path\to\hevd.c
+:: If the target is not specified, the `src\default_target.c` is used.
+
 set optimization= /Od
 
 set target_source= 
 IF %1.==. GOTO No1
-set target_source= /DTARGET_SOURCE=../%1
+:: Allow full paths by checking whether the second character is a ':'. There is probably a better option.
+set target_source=%1
+IF %target_source:~1,1%==: (set target_source= /DTARGET_SOURCE=%target_source%) ELSE (set target_source=/DTARGET_SOURCE=../%target_source%)
+echo %target_source%
 :No1
 
 del build\*.pdb >NUL 2>&1
