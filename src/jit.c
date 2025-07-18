@@ -1583,21 +1583,11 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                     
                     // 
                     // @note: Resetting is done at the end of this loop for all breakpoint types.
+                    //        This is important, because read/write breakpoints rely on `jit_skip_one_breakpoint` to be set until after the first instruction completes executing.
                     // 
                     // mov [context + .jit_skip_one_breakpoint], 0
                     // emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
                 }
-            }
-            
-            if(context->jit_skip_one_breakpoint && instruction_rip == initial_rip){
-                // Reset the 'jit_skip_one_breakpoint' only after the first instruction 
-                // of the first block has been executed.
-                // Future blocks will not go into this code path, as we will first execute this block
-                // and hence the value will be reset.
-                // 
-                //      mov [context + .jit_skip_one_breakpoint], 0
-                //      
-                emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
             }
         }
         
@@ -5084,8 +5074,10 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                     // @cleanup: Right now we always leave the jit here, as we have just called
                     //           'invalidate_translate_lookaside_buffers' and potentially the whole
                     //           address space might have changed.
-                    
-                    is_terminating_instruction = 1;
+                    //           
+                    //    add nonvol_rip, imm8
+                    emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size); 
+                    is_unconditional_jump = 1;
                 }
             }break;
             
@@ -6613,6 +6605,11 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
         
         if(jump_patch){
             
+            // 
+            // We ended in a conditional jump. Conditional jumps are always rip-relative.
+            // We are in the branch taken case, rip has already been adjusted.
+            // 
+            
             assert(conditional_branch_rip);
             
             if((instruction_rip & ~0xfff) == (conditional_branch_rip & ~0xfff)){
@@ -6627,7 +6624,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             *jump_patch = (s8)(end - start);
             
             // 
-            // We ended in a conditional jump. Conditional jumps are always rip-relative.
+            // We are in the branch not taken case, add the rip.
             // 
             //    add nonvol_rip, imm8
             emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
@@ -6638,66 +6635,74 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 emit_patchable_jit_exit(context, instruction_rip, BRANCH_not_taken);
             }
             
-            skip_jit_exit = 1;
-            is_terminating_instruction = 1;
-        }else if(is_unconditional_jump){
             is_terminating_instruction = 1;
         }else{
-            //
-            // Update the rip, and jump to the next instruction.
-            //
-            //    add nonvol_rip, imm8
-            emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
-        }
-        
-        if(should_check_for_interrupts){
             
-            // Call check for interrupts and exit the jit if one was delivered.
-            //     mov arg1, context
-            //     mov arg2, registers
-            //     call check_for_interrupts
+            // 
+            // @cleanup: Currently, we only do these post-instruction things if the instruction is not in conditional jump.
+            //           Technically, the sti instruction might cause us to have to `check_for_interrupts` after a conditional branch.
+            // 
             
-            emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_context));
-            emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_registers));
-            emit_call_to_helper(context, check_for_interrupts, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_do_not_print);
+            if(should_check_for_interrupts){
+                
+                // Call check for interrupts and exit the jit if one was delivered.
+                //     mov arg1, context
+                //     mov arg2, registers
+                //     call check_for_interrupts
+                
+                emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_context));
+                emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_registers));
+                emit_call_to_helper(context, check_for_interrupts, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_do_not_print);
+            }
+            
+            if(context->jit_skip_one_breakpoint && instruction_rip == initial_rip){
+                // Reset the 'jit_skip_one_breakpoint' only after the first instruction of the first block has been executed.
+                // Future blocks will not go into this code path, as we will first execute this and hence the value will be reset.
+                // 
+                //      mov [context + .jit_skip_one_breakpoint], 0
+                //      
+                emit(0xC7, make_modrm(MOD_REGM_OFF32, 0, NONVOL_context)); emit32(offset_in_type(struct context, jit_skip_one_breakpoint)); emit32(0);
+            }
+            
+            if(instruction_byte == /*sti*/0xfb){
+                // 
+                // If the instructions was STI, we should check after the _next_ instruction, 
+                // not after the current one, because of the _interrupt shadow_.
+                // This also means the next instruction needs to be part of this jit-block.
+                // 
+                should_check_for_interrupts = 1;
+                assert(globals.single_stepping || is_terminating_instruction == 0);
+                is_terminating_instruction = 0;
+            }
+            
+            if(is_unconditional_jump){
+                is_terminating_instruction = 1;
+                
+                emit_patchable_jit_exit(context, 0, BRANCH_unconditional);
+            }else{
+                //
+                // Update the rip, and jump to the next instruction.
+                //
+                //    add nonvol_rip, imm8
+                emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
+            }
         }
-        
-        if(instruction_byte == /*sti*/0xfb){
-            // 
-            // If the instructions was STI, we should check after the _next_ instruction, 
-            // not after the current one, because of the _interrupt shadow_.
-            // This also means the next instruction needs to be part of this jit-block.
-            // 
-            should_check_for_interrupts = 1;
-            assert(globals.single_stepping || is_terminating_instruction == 0);
-            is_terminating_instruction = 0;
-        }
-        
         
         instruction_rip += instruction_size;
         
-#if 0
-        // 
-        // For debugging purposes, put the instruction we emit code for
-        // in a disabled block just after the code we emit.
-        // 
-        emit(0xeb, (u8)instruction_size); 
-        emit_bytes(context, instruction, instruction_size);
-#endif
+        if(false){
+            // 
+            // For debugging purposes, put the instruction we emit code for
+            // in a disabled block just after the code we emit.
+            // 
+            emit(0xeb, (u8)instruction_size); 
+            emit_bytes(context, instruction, instruction_size);
+        }
     }
     
-#if !DISABLE_TAILCALL_OPTIMIZTIONS
-    
-    if(!skip_jit_exit){
+    if(!is_terminating_instruction || globals.single_stepping){
         emit_patchable_jit_exit(context, 0, BRANCH_unconditional);
     }
-    
-#else
-    // exit_jit:
-    // jmp context->jit_exit
-    u32 patch = (s32)(context->jit_exit - (emit_get_current(context) + 5));
-    emit(0xe9);  emit32(patch);
-#endif
     
 #if VTUNE_JIT_PROFILING
     if(globals.fuzzing){
