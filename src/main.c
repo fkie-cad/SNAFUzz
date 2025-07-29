@@ -729,7 +729,12 @@ static u64 patch_in_kernel_cr3(struct context *context){
     u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
     
     // @note: If we don't have a kpcr I assume, that we are pre-boot and don't want to change the cr3.
-    if(kpcr) context->registers.cr3 = guest_read(u64, kpcr + 0xb000) & 0x7ffffffffffff000;
+    if(kpcr){
+        u64 kernel_page_table = guest_read(u64, kpcr + 0xb000);
+        if(kernel_page_table){ // This happend to be 0, when VaShadows might have been off? Investigate.
+            context->registers.cr3 = kernel_page_table & 0x7ffffffffffff000;
+        }
+    }
     return cr3;
 }
 
