@@ -549,6 +549,21 @@ struct loaded_module *parse_loaded_module(struct context *context, u64 guest_ima
         module = get_loaded_module(short_name);
     }
     
+    if(module && (s64)module->guest_image_base < 0 && (s64)guest_image_base > 0){
+        // We are a user-space module with the same name as a kernel-space module.
+        // add a `u_` to the name and register it anew.
+        
+        u8 *new_data = push_data(&context->scratch_arena, u8, short_name.size + 2);
+        new_data[0] = 'u';
+        new_data[1] = '_';
+        memcpy(new_data + 2, short_name.data, short_name.size);
+        
+        short_name.data = new_data;
+        short_name.size += 2;
+        
+        module = get_loaded_module(short_name);
+    }
+    
     if(module){
         // 
         // Still get the new bounds for the imagae.
