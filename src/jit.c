@@ -199,17 +199,6 @@ void vtune_jit_profiling_routine(u8 *start, u8 *end, char *format, ...){
 #define vtune_jit_profiling_routine(...)
 #endif
 
-enum {
-    REG_OPCODE_add = 0,
-    REG_OPCODE_or  = 1,
-    REG_OPCODE_adc = 2,
-    REG_OPCODE_sbb = 3,
-    REG_OPCODE_and = 4,
-    REG_OPCODE_sub = 5,
-    REG_OPCODE_xor = 6,
-    REG_OPCODE_cmp = 7,
-};
-
 // 
 // @note: @WARNING: We should not exceed 6 non-volatile registers as the system-V calling convention only supports 6 non-volatiles.
 //                  Currently we support both te system-v and the Windows-x64 calling convention.
@@ -6434,8 +6423,8 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                             }break;
                         }
                         
-                        assert(volatile_xmm_index <= array_count(volatile_xmms));
-                        assert(volatile_gpr_index <= array_count(volatile_gprs));
+                        assert(volatile_xmm_index <= (int)array_count(volatile_xmms));
+                        assert(volatile_gpr_index <= (int)array_count(volatile_gprs));
                     }
                     
                     // 
@@ -6558,8 +6547,8 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                             }break;
                         }
                         
-                        assert(volatile_xmm_index <= array_count(volatile_xmms));
-                        assert(volatile_gpr_index <= array_count(volatile_gprs));
+                        assert(volatile_xmm_index <= (int)array_count(volatile_xmms));
+                        assert(volatile_gpr_index <= (int)array_count(volatile_gprs));
                     }
                     
                     

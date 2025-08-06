@@ -1181,7 +1181,7 @@ THREAD_RETURN start_fuzzing(void *thread_index){
                 u32 input_size  = (u32)fuzz_cases_since_reset;
                 xor_shift(&crash_index);
                 
-                for(int table_index = 0; table_index < array_count(globals.crash_table); table_index++){
+                for(int table_index = 0; table_index < (int)array_count(globals.crash_table); table_index++){
                     int index = (crash_index + table_index) & (array_count(globals.crash_table) - 1);
                     
                     //
@@ -1259,6 +1259,10 @@ THREAD_RETURN start_fuzzing(void *thread_index){
 #endif
                 
                 save_inputs_to_file(file_name_buffer, saved_inputs, fuzz_cases_since_reset + 1);
+                
+                if(crash_status == CRASH_is_new_and_unique){
+                    print("\nSaved repro file at %s\n", file_name_buffer);
+                }
                 
                 ticket_spinlock_unlock(&globals.crash_repro_file_printing_lock);
             }

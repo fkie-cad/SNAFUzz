@@ -884,6 +884,16 @@ enum register_encoding{
     REGISTER_XMM6 = 6,
     REGISTER_XMM7 = 7,
     
+    // Used by the jit.
+    REG_OPCODE_add = 0,
+    REG_OPCODE_or  = 1,
+    REG_OPCODE_adc = 2,
+    REG_OPCODE_sbb = 3,
+    REG_OPCODE_and = 4,
+    REG_OPCODE_sub = 5,
+    REG_OPCODE_xor = 6,
+    REG_OPCODE_cmp = 7,
+    
     INVALID_REGISTER = -1, // Used by the jit.
 };
 

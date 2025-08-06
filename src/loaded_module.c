@@ -558,7 +558,7 @@ struct loaded_module *parse_loaded_module(struct context *context, u64 guest_ima
         new_data[1] = '_';
         memcpy(new_data + 2, short_name.data, short_name.size);
         
-        short_name.data = new_data;
+        short_name.data = (char *)new_data;
         short_name.size += 2;
         
         module = get_loaded_module(short_name);

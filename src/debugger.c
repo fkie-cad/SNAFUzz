@@ -41,7 +41,7 @@ static char *breakpoint_type_to_string[] = {
 // returns 'success'.
 int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum breakpoint_flags flags){
     
-    int breakpoint_index = 0;
+    u64 breakpoint_index = 0;
     for(;globals.breakpoints[breakpoint_index].type != BREAKPOINT_none; breakpoint_index++){
         struct breakpoint breakpoint = globals.breakpoints[breakpoint_index];
         if(breakpoint.type == type && breakpoint.address == address && breakpoint.flags == flags){
@@ -72,7 +72,7 @@ int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum brea
     return 1;
 }
 
-void clear_breakpoint(int breakpoint_index){
+void clear_breakpoint(u64 breakpoint_index){
     assert(breakpoint_index < array_count(globals.breakpoints));
     
     if(globals.breakpoints[breakpoint_index].type == BREAKPOINT_none) return;
@@ -91,7 +91,7 @@ int check_breakpoint(enum breakpoint_type type, u64 address_start, u64 size){
     
     u64 address_end = address_start + size;
     
-    for(int breakpoint_index = 0; breakpoint_index < array_count(globals.breakpoints); breakpoint_index++){
+    for(int breakpoint_index = 0; breakpoint_index < (int)array_count(globals.breakpoints); breakpoint_index++){
         if(globals.breakpoints[breakpoint_index].type != type) continue;
         
         struct breakpoint breakpoint = globals.breakpoints[breakpoint_index];
@@ -1925,7 +1925,7 @@ void handle_debugger(struct context *context){
         // WARNING: In the loop below don't return as in the very end we reset 'globals.breakpoint_hit_index'.
         //
         if(globals.breakpoint_hit_index >= 0){
-            assert(globals.breakpoint_hit_index < array_count(globals.breakpoints));
+            assert(globals.breakpoint_hit_index < (s32)array_count(globals.breakpoints));
             
             enum breakpoint_type type = globals.breakpoints[globals.breakpoint_hit_index].type;
             
@@ -3263,7 +3263,7 @@ void handle_debugger(struct context *context){
                     print("\n");
                 }
             }else{
-                for(int breakpoint_index = 0; breakpoint_index < array_count(globals.breakpoints); breakpoint_index++){
+                for(int breakpoint_index = 0; breakpoint_index < (int)array_count(globals.breakpoints); breakpoint_index++){
                     if(globals.breakpoints[breakpoint_index].type != BREAKPOINT_none){
                         struct breakpoint breakpoint = globals.breakpoints[breakpoint_index];
                         char *string  = breakpoint_type_to_string[breakpoint.type];

@@ -189,6 +189,7 @@ void target_read_guest_input_buffer__default(struct context *context){
 // `add_input` atomically adds an input to `globals.inputs`.
 // Target specific code should only used this function during `target_initialize`
 // as the system takes care of saving inputs, once fuzzing starts.
+// This function expects `input` to be in stable memory.
 void add_input(struct input input);
 
 // `load_input_directory` iterates a directory, loads each file and adds 

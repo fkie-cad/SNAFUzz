@@ -65,7 +65,7 @@ static void register_hook_(struct context *context, u64 rip, hook_callback *hook
     x ^= x >> 7;
     x ^= x << 17;
     
-    for(int i = 0; i < array_count(globals.hook_table); i++){
+    for(u64 i = 0; i < array_count(globals.hook_table); i++){
         int index = (x + i) & (array_count(globals.hook_table) - 1);
         if(globals.hook_table[index].rip == 0 || globals.hook_table[index].rip == (u64)-1){
             globals.hook_table[index].hook = hook;
@@ -89,7 +89,7 @@ static struct hook *lookup_hook(u64 rip){
     x ^= x >> 7;
     x ^= x << 17;
     
-    for(int i = 0; i < array_count(globals.hook_table); i++){
+    for(u64 i = 0; i < array_count(globals.hook_table); i++){
         int index = (x + i) & (array_count(globals.hook_table) - 1);
         if(globals.hook_table[index].rip == 0) return null;
         
