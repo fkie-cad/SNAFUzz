@@ -86,9 +86,16 @@ Inputs are based on a simple mutator (`apply_simple_mutations`) and coverage fee
 <img src='images/fuzzing_hevd.gif' alt="Fuzzing HEVD with the default target and finding lots of crashes.">
 </p>
 
-For more complex targets you can specify target-specific code when building. An example of this is the `hevd.c` file.
-A target file allows you to run setup code and allows for target-specific mutation and execution code.
-For a more documentation for writing target-specific code see `target_specific_code_api.h`.
+For more complex targets you can specify target-specific code when building (also see the [Build](#Build) section). 
+An example for a kernel mode module is the `hevd.c` file and an example for a user-space application is `HeaderParser.c`.
+A target file allows you to run setup code and allows for target-specific mutation and execution code, 
+by requiring you to implement the following functions:
+
+* `target_initialize`
+* `target_get_input`
+* `target_execute_input`
+
+For a more documentation on how to write target-specific code see `target_specific_code_api.h`.
 
 ## Using .DMP-files as Snapshots
 
@@ -167,7 +174,7 @@ The script is based of [this](https://github.com/alephsecurity/general-research-
 <img src='images/ghidra.gif' alt="Using the `ColorHitInstructions.java` ghidra script.">
 </p>
 
-## Build <a name="section-build"></a>
+## Build
 
 Currently, the only supported platform is Windows and the only supported compiler is MSVC.
 The build _should be_ as simple as using `build.bat` from an "x64 Native Tools Command Prompt" in the root directory of the project.
@@ -205,7 +212,8 @@ No optimizations between instructions are implemented. Essentially, an instructi
     mov [registers + .rcx], rax          ; Write the resulting value into the guest registers.
 ```
 Lifted blocks are cached based on the physical page they start and end on and block lookup is speed-up by an instruction cache.
-On a crash or timeout, the JIT simply sets `context->crash` and returns out.
+Calls to lifted blocks are "chained", by letting each block remember what they jumped to last time and check inside the JIT,
+whether they want to jump to the same address again. On a crash or timeout, the JIT simply sets `context->crash` and returns out.
 
 Coverage information (`coverage.c`) is collected while jitting instructions and compare- and branch-coverage work by emitting a special function calls before comparison- and conditional jump-instructions.
 
