@@ -2,7 +2,7 @@
 //_____________________________________________________________________________________________________________________
 // Utilities.
 
-void load_input_directory(char *directory_path){
+void load_input_directory(char *directory_path){ // @cleanup: How should we handle failiure.
     
 #if _WIN32
     struct win32_find_data find_data;
@@ -12,7 +12,10 @@ void load_input_directory(char *directory_path){
     
     HANDLE find_handle = FindFirstFileA(buffer, &find_data);
     
-    if(find_handle.Unused == /*INVALID_HANDLE_VALUE*/(u64)-1) return;
+    if(find_handle.Unused == /*INVALID_HANDLE_VALUE*/(u64)-1){
+        print("Error: Input corpus directory '%s' does not exist.\n", directory_path);
+        _exit(1);
+    }
     
     print("loading %s:\n", directory_path);
     do{
@@ -40,8 +43,8 @@ void load_input_directory(char *directory_path){
 #else
     DIR *dir = opendir(directory_path);
     if(!dir){
-        perror("opendir failed");
-        return;
+        print("Error: Input corpus directory '%s' does not exist.\n", directory_path);
+        exit(1);
     }
     
     struct dirent *entry;

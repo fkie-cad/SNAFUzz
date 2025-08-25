@@ -1,3 +1,79 @@
+// 
+// This is an example of target-specific code for a user mode program.
+// The user mode program in question is the "headerParser":
+// 
+//     https://github.com/fkie-cad/headerParser
+// 
+// This is only intended to serve as an example of how to use SNAFUzz 
+// to attack user mode programs.
+// 
+// To build this file into snafuzz as the target-specific code, use
+//     
+//     build.bat headerParser.c
+//     
+// Taking a snapshot:
+// 
+// One core annoyance with fuzzing user mode programs is that it is 
+// more complicated to set breakpoints. The kernel is always mapped 
+// into memory, and therefore, you can set a breakpoint on a kernel
+// function whenever you like. With user space applications, you
+// don't know where they will be located before they are launched.
+// Further, even after they are launched it might be hard to locate
+// the address range.
+// 
+// Furthermore, user-mode memory is often mapped out, causing us not
+// to be able to read the program headers and therefore not being able
+// to load debug information.
+// 
+// There are two ways to deal with this issue:
+// 
+//   1. You somehow manage to set a breakpoint when the application
+//      is running, for example setting a breakpoint on a rarely
+//      called kernel function e.g.: afd!AfdConnect if the application
+//      connects a socket on startup.
+//      And then, after you have a breakpoint, inside the application
+//      use the `lock_user_modules` debugger command. This will lock
+//      all user modules in guest physical memory and therefore allow
+//      us to load debug information.
+//      
+//   2. You can use something like the `user_snapshot.c`.
+//      
+//          user_snapshot.exe <breakpoint offset> -- <target command line>
+//      
+//      This snapshotting utility is a small "debugger" that on startup,
+//      sets a breakpoint on the main executable plus <breakpoint offset>
+//      and when the breakpoint is hit locks the whole guest address space
+//      and then causes a breakpoint the Virtual Machine debugger 
+//      
+// For the headerParser, option 2. makes it very easy. 
+// First let's get a version of the headerParser:
+// 
+//    git clone https://github.com/fkie-cad/headerParser.git --branch v1.15.13
+//    cd headerParser
+//    winBuild.bat /pts v143 /pdb /p:RunTimeLib=Debug
+// 
+// (It's a little annoying for this, that we don't ship the .pdb's so we have to build it manually, but whatever).
+// The function that we want to fuzz is 'parseHeader' and for my build of the headerParser
+// its at offset 0x26c90.
+// 
+// Build the `user_snapshot.exe` by using `cl user_snaphshot.c` and copy both files to the virtual machine
+// (either through the drag_and_drop.c service or by using Hyper-V).
+// 
+// If not already, boot the virtual machine in the snafuzz snapshot mode (snafuzz.exe <.vhdx>).
+// Now taking a snapshot should be as easy as doing:
+// 
+//    user_snapshot.exe 0x26c90 -- parseHeader.exe parseHeader.exe
+//    
+// inside the guest, and then when snafuzz breaks in the debugger, 
+// taking a snapshot using `snapshot fuzz`.
+// 
+// Now, if you have taken a snapshot and build snafuzz using `build.bat HeaderParser.c`,
+// the last thing to do before fuzzing is to provide an input corpus in a `corpus_HeaderParser` directory.
+// This directory is expected to live in the root-directory of snafuzz.
+// After that, fuzzing should be as simple as `snafuzz fuzz.snapshot --`
+// 
+//                                                             - Pascal Beyer 25.08.2025
+// 
 
 // 
 // We want to fuzz 'parseHeader(u8 force, /*out*/PHeaderData hd, /*in*/PGlobalParams gp, PPEParams pep, PElfParams elfp, PDexParams dexp)'.
@@ -11,8 +87,6 @@
 //    
 //    GlobalParams also has an 'info_level' and a 'info_show_offsets'. 
 //    I don't really see any reason not to put these 'info_levels' all to 0xffffffff.
-//    
-// 
 // 
 
 __declspec(thread) struct{
@@ -64,7 +138,7 @@ void fseek_hook(struct context *context, struct registers *registers){
         offset = thread_locals.current_input.size + offset;
     }
     
-    if(offset < thread_locals.current_input.size){
+    if(0 <= offset && offset <= thread_locals.current_input.size){
         thread_locals.current_offset = offset;
         registers->rax = 0;
     }else{
@@ -137,7 +211,7 @@ struct crash_information target_execute_input(struct context *context, struct in
     
     // 
     // Inject the first read into the input.
-    u64 input_buffer = context->registers.r8 + 0x200;
+    u64 input_buffer = context->registers.r8 + 0x208;
     u64 size_to_write = (input.size < 0x400) ? input.size : 0x400;
     guest_write_size(context, input.data, input_buffer, size_to_write);
     
