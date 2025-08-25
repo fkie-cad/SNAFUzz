@@ -277,6 +277,7 @@ static void simulate_allocation_failure(struct context *context, struct register
 // @cleanup: This is a bit wasteful, because it assumes it has to work by kernel rules, but whatever.
 void guest_allocate__inner(struct context *context, struct registers *registers, u64 NumberOfBytes, u64 alignment, int raise_on_failure, int initialized){
     
+    if(!globals.fuzzing) return; // Prior to fuzzing we want all allocations to be handled by the guest.
     
 #if !DETECT_ONE_BYTE_OUT_OF_BOUNDS
     // Align the allocation size to a 16-byte boundary.
