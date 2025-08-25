@@ -1,17 +1,17 @@
 // 
-// This is a drag and drop service, that you can run inside of the vm,
+// This is a drag and drop service, that you can run inside of the snapshot-mode VM,
 // to allow dragging and dropping of files to the guest desktop.
 // It uses a hacky special CPUID `CPUID_drag_and_drop`.
 // To build this service simply use `cl drag_and_drop.c` and then to 
-// auto start it, move the executable into the guests auto start folder
+// auto start it, move the executable into the guests auto start folder using Hyper-V
 // 
 //    C:\Users\<User Name>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
 //    
-// This only allows host to client copying of files.
+// This drag and drop service only allows host to guest copying of files.
 // To get this executable into the guest either use an .iso (produced for example by oscdimg),
-// or use drag and drop supported by Hyper-V "extended session".
+// or use drag and drop supported by Hyper-V "extended session" (essentially using RDP).
 // 
-//                                                        - Pascal Beyer 04.04.2025
+//                                                        - Pascal Beyer 25.08.2025
 // 
 
 
