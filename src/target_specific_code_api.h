@@ -3,13 +3,14 @@
 // and is simply included in `main.c` from where it can use almost all other code.
 // If no argument to `build.bat` is provided, it defaults to `default_target.c`.
 // Because of the single compilation unit model (where we simply include the 
-// target specific code into `main.c`), this file is not supposed to function as a 
-// header file, but rather as "documentation".
+// target specific code into `main.c`), this file (`target_specific_code_api.h`)
+// is not supposed to function as a header file, but rather as "documentation".
+// 
 // As such, this file only includes the functions that are most useful for writing
 // target specific code, but nothing prevents you from calling any function you 
 // would like.
 // 
-// The target specific code has to implement two functions: 
+// The target specific code is required to implement two functions: 
 //     * target_initialize
 //     * target_execute_input
 //     
@@ -20,7 +21,7 @@
 // 
 // (for more information on these functions see below.)
 // 
-// Each of these four functions is passed a thread local 'context' structure, 
+// Each of these functions is passed a thread local 'context' structure, 
 // which contains:
 // 
 //     * The current register state in 'context->registers'.
@@ -36,7 +37,7 @@
 // 'globals.snapshot.registers'.
 // 
 // Some options in `options.c` are also implemented as globals and may be adjusted
-// by the target code, for example, you may adjust the `FUZZ_CASES_BEFORE_RESET`
+// by the target code. For example, you may adjust the `FUZZ_CASES_BEFORE_RESET`
 // or the `FUZZ_CASE_TIMEOUT`. But they should be constant after initialization.
 // 
 // For examples of target specific code, see `default_target.c`, `hevd.c` and `headerParser.c`.
@@ -68,7 +69,7 @@ typedef int target_specific_member_check[
 
 // 
 // The `target_initialize` function is called by the main thread prior to fuzzing.
-// This means any changes to the snapshot are permanent, which can be used to 
+// This means any changes to the snapshot are permanent. This can be used to 
 // initialize the target, e.g.: open a HANDLE to a device you want to fuzz, 
 // by setting up a stack frame and calling `start_execution_jit` or reading
 // and writing guest memory by using `guest_read` and `guest_write`.
@@ -76,7 +77,14 @@ typedef int target_specific_member_check[
 // `target_initialize` should also allocate at least one input, which is 
 // expected to be allocated in `context->permanent_arena` and added using `add_input`.
 // Inputs can be loaded from an "inputs" directory using `load_input_directory`.
+// 
 // Any necessary Hooks should also be registered during `target_initialize`.
+// Usually, at least crash hooks have to be registered to detect crashes,
+// this can be done using `register_bugcheck_hooks`, for kernel-mode targets,
+// or using `register_user_crash_hooks`, for user-space applications.
+// 
+// Optionally, heap tracking can be enabled using `register_kernel_memory_allocation_hooks`
+// or register_user_memory_allocation_hooks.
 // 
 // (see below for any referenced function).
 // 
@@ -89,8 +97,8 @@ typedef int target_specific_member_check[
 void target_initialize(struct context *context, int target_argc, char *target_argv[]);
 
 // 
-// This functions is called prior to each fuzz-case. The returned 'input'
-// is expected to be allocated in the 'context->fuzz_run_arena'.
+// The `target_get_input` function is called prior to each fuzz-case. 
+// The returned 'input' is expected to be allocated in the 'context->fuzz_run_arena'.
 // Depending on your target, you might want to write generators, specialized
 // mutators etc.
 // 
@@ -108,25 +116,27 @@ struct input target_get_input__default(struct context *context, u64 *seed){
 }
 
 // 
-// This function is called to inject and execute each fuzz-case and 
+// The `target_execute_input` function is called to inject and execute each fuzz-case and 
 // is always supposed to call `start_execution_jit` at least once.
 // Here is a simple implementation:
 // 
-//     context->registers = globals.snapshot.registers;
-//     guest_write(u64, context->registers.rsp, DEFAULT_RETURN_RIP); // Set up returning as "successful" execution.
-//     guest_write_size(context, input.data, /*input_buffer*/context->registers.rcx, input.size);
-//     return start_execution_jit(context);
+// struct crash_information target_execute_input(struct context *context, struct input input){
+//     context->registers = globals.snapshot.registers;                                           // Reset the register state to be as it was when taking the snapshot.
+//     guest_write_size(context, input.data, /*input_buffer*/context->registers.rcx, input.size); // Write in the input into the guest.
+//     guest_write(u64, context->registers.rsp, DEFAULT_RETURN_RIP);                              // Set up returning as "successful" execution.
+//     return start_execution_jit(context);                                                       // Execute the function under test.
+// }
 //     
 // This implementation assumes:
 // 
 //     * `target_initialize` has set up `globals.snapshot.registers` as needed.
-//     * the input buffer, which needs fuzzing is contained in rcx and at least `input.size` big.
+//     * the input buffer, which needs fuzzing is contained in rcx and is at least `input.size` big.
 // 
 // 
 struct crash_information target_execute_input(struct context *context, struct input input);
 
 // 
-// This function is called after we have reset the target to the snapshot.
+// The target_reset function is called after we have reset the target to the snapshot.
 // Target-specific code structures can be reset in this function.
 // 
 void target_reset(struct context *context);
@@ -181,7 +191,7 @@ void target_read_guest_input_buffer__default(struct context *context){
 
 
 
-// (After this point, all functions are implemented by the system and can be used in one of the four functions above).
+// (After this point, all functions are implemented by the system and can be used in one of the functions above).
 
 //_____________________________________________________________________________________________________________________
 // Functions to control the input corpus.
@@ -238,21 +248,6 @@ u64 get_member_offset(struct context *context, struct string symbol);
 // or "target!FuzzMeBuffer + 100". All integers are interpreted as hex.
 u64 parse_address(struct context *context, struct string *line, int *error);
 
-// Hooks are callbacks which are executed once a certain rip is reached.
-// This can be used for example to track allocations, detect crashes,
-// or inject inputs. For example, one might redirect `fread` and `fseek` to use 
-// the `current_input` and a `current_offset` which were previously 
-// (in `target_execute_input`) stashed in a structure like:
-// 
-//     thread_local struct {
-//         struct input current_input;
-//         u64 current_offset;
-//     } target_context;
-// 
-// For more information see `hooks.c`. 
-void register_hook_(struct context *context, u64 rip, hook_callback *hook, char *hook_string);
-#define register_hook(context, rip, hook) register_hook_((context), (rip), (hook), #hook)
-
 // If you are working with a user-space target, symbols might not load automatically,
 // because parts of the image are paged out. In this case, you can load the symbols
 // manually (provided you have the .pdb), by doing the following:
@@ -264,6 +259,55 @@ void register_hook_(struct context *context, u64 rip, hook_callback *hook, char 
 struct loaded_module *get_loaded_module(struct string module_name);
 struct file load_file(char *file_name);
 struct pdb_context *load_pdb(struct file pdb_file);
+
+//_____________________________________________________________________________________________________________________
+// Hooks.
+
+// Hooks are callbacks which are executed once a certain rip is reached.
+// This can be used for example to track allocations, detect crashes,
+// or inject inputs. For example, one might redirect `fread` and `fseek` to use 
+// the `current_input` and a `current_offset` which were previously 
+// (in `target_execute_input`) stashed in a structure like:
+// 
+//     thread_local struct {
+//         struct input current_input;
+//         u64 current_offset;
+//     } target_context;
+// 
+// Hooks have to be registered in the `target_initialize` function!
+// 
+// For more information see `hooks.c`. 
+void register_hook_(struct context *context, u64 rip, hook_callback *hook, char *hook_string);
+#define register_hook(context, rip, hook) register_hook_((context), (rip), (hook), #hook)
+
+// The most important hooks are crash hooks.
+// These hooks more or less define what is considered a "crash" for your target.
+// 
+// For kernel-mode targets, this is the `register_bugcheck_hooks` function,
+// which hooks `nt!KeBugCheck`, `nt!KeBugCheck2` and `nt!KeBugCheckEx`.
+// 
+// For user-mode targets, this is the `register_user_crash_hooks` function,
+// that tries to check for unhandled exceptions in multiple ways.
+void register_bugcheck_hooks(struct context *context);
+void register_user_crash_hooks(struct context *context);
+
+// Hooks can also be used to enable memory allocation tracking.
+// This enabled the system to have some ASAN-like features.
+// To enable these features call either `register_kernel_memory_allocation_hooks`
+// or `register_user_memory_allocation_hooks` depending on your context.
+void register_user_memory_allocation_hooks(struct context *context);
+void register_kernel_memory_allocation_hooks(struct context *context);
+
+// Internally, the allocation tracking first (when called from `target_initialize`) allocates a big allocation
+// of `FUZZING_BIG_ALLOCATION_SIZE` bytes, and then registers hooks on `malloc`, `calloc`, `realloc`, `free`, etc.
+// These hooks then prevent the underlying allocation and instead linealy allocate memory from the "big allocation".
+// Once set up, you can use this system to allocate guest memory through the `guest_allocate__inner` function.
+// Though only for allocations up to `FUZZING_ALLOCATION_LIMIT`.
+// This memory can also be _freed_ using `guest_free__inner`, but all this means is marking the whole range as being
+// "inaccessible", i.e. causing a crash when accessed by the guest.
+// The "big allocation" is only ever really freed, when the guest is reset to the snapshot.
+void guest_allocate__inner(struct context *context, struct registers *registers, u64 NumberOfBytes, u64 alignment, int raise_on_failure, int initialized);
+void guest_free__inner(struct context *context, u64 allocated_address);
 
 //_____________________________________________________________________________________________________________________
 // Reading and writing guest memory.

@@ -1762,6 +1762,11 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
     target_initialize(context, target_argc, target_argv);
     if(PRINT_STARTUP_EVENTS) print("Done calling 'target_initialize'.\n");
     
+    if(globals.amount_of_inputs == 0){
+        print("Error: The target specific code must add at least one input to the corpus using the `add_input` function.\n");
+        return 1;
+    }
+    
 #if _WIN32
     {
         //
