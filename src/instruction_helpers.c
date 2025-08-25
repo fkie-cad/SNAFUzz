@@ -1190,6 +1190,11 @@ void helper_cpuid(struct context *context, struct registers *registers){
                 //    31 - SSBD Supported
                 
                 rdx = 0xbc000400;
+                
+                if(globals.cpu_vendor == VENDOR_AMD){
+                    rdx &= ~/*IA32_ARCH_CAPABILITIES*/(1 << 29);
+                }
+                
             }else{
                 // All zeroes indicates that this subleaf is invalid.
                 rax = 0;
