@@ -3686,33 +3686,35 @@ void handle_debugger(struct context *context){
             continue;
         }
         
-        if(string_match(command, string("irp"))){
-            if(!nt || !nt->pdb_context){
-                print("Error: Kernel (ntoskrnl.exe) not loaded yet (or lstar not set yet).\n");
+        if(string_match(command, string("lock_user_modules"))){
+            
+            if((s64)registers->rip < 0){
+                print("Error: lock_user_modules can only be executed while in user space.\n");
                 continue;
             }
             
-            int error = 0;
-            u64 IrpAddress = parse_address(context, &line, &error);
-            if(error) continue;
+            void lock_userspace_module_memory(struct context *context);
             
-            print_irp(context, nt, IrpAddress);
+            struct registers save = context->registers;
+            
+            int depth = context->skip_setting_permission_bits;
+            s64 fuzz_case_timeout = context->fuzz_case_timeout;
+            int use_hypervisor = context->use_hypervisor;
+            
+            context->skip_setting_permission_bits = 0;
+            context->fuzz_case_timeout = 0x7fffffffffffffff;
+            context->use_hypervisor = 0;
+            
+            lock_userspace_module_memory(context);
+            
+            context->skip_setting_permission_bits = depth;
+            context->fuzz_case_timeout = fuzz_case_timeout;
+            context->use_hypervisor = use_hypervisor;
+            
+            context->registers = save;
             continue;
         }
         
-        if(string_match(command, string("mdl"))){
-            if(!nt || !nt->pdb_context){
-                print("Error: Kernel (ntoskrnl.exe) not loaded yet (or lstar not set yet).\n");
-                continue;
-            }
-            
-            int error = 0;
-            u64 MdlAddress = parse_address(context, &line, &error);
-            if(error) continue;
-            
-            print_mdl(context, nt, MdlAddress);
-            continue;
-        }
         
         //
         // Everything above this should have an entry in 'help'.
@@ -3761,6 +3763,8 @@ void handle_debugger(struct context *context){
             print("    info                    - Prints any known information if the current rip is a known function\n");
             print("                              (e.g.: nt!NtDeviceIoControlFile).\n");
             print("    user_modules            - Print user modules based on the '_PEB'.\n");
+            print("    lock_user_modules       - Locks all user modules by calling NtLockVirtualMemory. Useful for user-mode targets.\n");
+            print("                              WARNING: This executes inside the guest and thus might corrupt things.\n");
             print("    kernel_modules          - Print kernel modules based on the 'nt!PsLoadedModuleList'.\n");
             print("    load_module [<address>] - Loads a module by walking page-wise backwards until it finds an 'MZ' signature.\n");
             print("    load_pdb <pdb-file>     - Loads the specified pdb and uses it for the module of the same name.\n");
@@ -3770,6 +3774,9 @@ void handle_debugger(struct context *context){
             continue;
         }
         
+        // 
+        // Random commands that I should maybe document, I dunno.
+        // 
         
         if(string_match(command, string("script"))){
             
@@ -3790,35 +3797,6 @@ void handle_debugger(struct context *context){
                 print("Unknown script. Currently only nt.\n");
             }
             
-            continue;
-        }
-        
-        if(string_match(command, string("lock_user_modules"))){
-            
-            if((s64)registers->rip < 0){
-                print("Error: lock_user_modules can only be executed while in user space.\n");
-                continue;
-            }
-            
-            void lock_userspace_module_memory(struct context *context);
-            
-            struct registers save = context->registers;
-            
-            int depth = context->skip_setting_permission_bits;
-            s64 fuzz_case_timeout = context->fuzz_case_timeout;
-            int use_hypervisor = context->use_hypervisor;
-            
-            context->skip_setting_permission_bits = 0;
-            context->fuzz_case_timeout = 0x7fffffffffffffff;
-            context->use_hypervisor = 0;
-            
-            lock_userspace_module_memory(context);
-            
-            context->skip_setting_permission_bits = depth;
-            context->fuzz_case_timeout = fuzz_case_timeout;
-            context->use_hypervisor = use_hypervisor;
-            
-            context->registers = save;
             continue;
         }
         
@@ -3853,63 +3831,31 @@ void handle_debugger(struct context *context){
             continue;
         }
         
-        //
-        // After this point there are things you only really care about if you are debugging specific internals.
-        //
-        
-        if(string_match(command, string("KeLoaderBlock"))){
-            if(!nt){
+        if(string_match(command, string("irp"))){
+            if(!nt || !nt->pdb_context){
                 print("Error: Kernel (ntoskrnl.exe) not loaded yet (or lstar not set yet).\n");
                 continue;
             }
             
-            u64 KeLoaderBlock = guest_read(u64, get_symbol_from_module(context, nt, string("KeLoaderBlock")));
+            int error = 0;
+            u64 IrpAddress = parse_address(context, &line, &error);
+            if(error) continue;
             
-            print("KeLoaderBlock %p\n\n", KeLoaderBlock);
-            
-            u8 *current = context->scratch_arena.current;
-            
-            print("LoadOrderList:\n"); // _KLDR_DATA_TABLE_ENTRY
-            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x10); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x10); entry_guest_address = guest_read(u64, entry_guest_address)){
-                
-                u64 image_base = guest_read(u64, entry_guest_address + 6 * 8);
-                u64 image_size = guest_read(u64, entry_guest_address + 8 * 8);
-                
-                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 9 * 8);
-                
-                print("%p %p %.*s\n", image_base, image_base + image_size, name.size, name.data);
+            print_irp(context, nt, IrpAddress);
+            continue;
+        }
+        
+        if(string_match(command, string("mdl"))){
+            if(!nt || !nt->pdb_context){
+                print("Error: Kernel (ntoskrnl.exe) not loaded yet (or lstar not set yet).\n");
+                continue;
             }
-            print("\n");
             
-            print("BootDriverList:\n"); // _BOOT_DRIVER_LIST_ENTRY 
-            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x30); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x30); entry_guest_address = guest_read(u64, entry_guest_address)){
-                
-                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
-                
-                print("   %.*s\n", name.size, name.data);
-            }
-            print("\n");
+            int error = 0;
+            u64 MdlAddress = parse_address(context, &line, &error);
+            if(error) continue;
             
-            print("EarlyLaunch:\n"); // _BOOT_DRIVER_LIST_ENTRY 
-            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x40); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x40); entry_guest_address = guest_read(u64, entry_guest_address)){
-                
-                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
-                
-                print("   %.*s\n", name.size, name.data);
-            }
-            print("\n");
-            
-            print("CoreDriver:\n"); // _BOOT_DRIVER_LIST_ENTRY 
-            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x50); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x50); entry_guest_address = guest_read(u64, entry_guest_address)){
-                
-                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
-                
-                print("   %.*s\n", name.size, name.data);
-            }
-            print("\n");
-            
-            context->scratch_arena.current = current;
-            
+            print_mdl(context, nt, MdlAddress);
             continue;
         }
         
@@ -3988,7 +3934,6 @@ void handle_debugger(struct context *context){
             context->registers.cr3 = cr3;
             continue;
         }
-        
         
         if(string_match(command, string("threads"))){
             
@@ -4083,6 +4028,67 @@ void handle_debugger(struct context *context){
             }
             
             context->registers.cr3 = cr3;
+            continue;
+        }
+        
+        
+        //
+        // After this point there are things you only really care about if you are debugging specific internals.
+        //
+        
+        if(string_match(command, string("KeLoaderBlock"))){
+            if(!nt){
+                print("Error: Kernel (ntoskrnl.exe) not loaded yet (or lstar not set yet).\n");
+                continue;
+            }
+            
+            u64 KeLoaderBlock = guest_read(u64, get_symbol_from_module(context, nt, string("KeLoaderBlock")));
+            
+            print("KeLoaderBlock %p\n\n", KeLoaderBlock);
+            
+            u8 *current = context->scratch_arena.current;
+            
+            print("LoadOrderList:\n"); // _KLDR_DATA_TABLE_ENTRY
+            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x10); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x10); entry_guest_address = guest_read(u64, entry_guest_address)){
+                
+                u64 image_base = guest_read(u64, entry_guest_address + 6 * 8);
+                u64 image_size = guest_read(u64, entry_guest_address + 8 * 8);
+                
+                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 9 * 8);
+                
+                print("%p %p %.*s\n", image_base, image_base + image_size, name.size, name.data);
+            }
+            print("\n");
+            
+            print("BootDriverList:\n"); // _BOOT_DRIVER_LIST_ENTRY 
+            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x30); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x30); entry_guest_address = guest_read(u64, entry_guest_address)){
+                
+                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
+                
+                print("   %.*s\n", name.size, name.data);
+            }
+            print("\n");
+            
+            print("EarlyLaunch:\n"); // _BOOT_DRIVER_LIST_ENTRY 
+            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x40); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x40); entry_guest_address = guest_read(u64, entry_guest_address)){
+                
+                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
+                
+                print("   %.*s\n", name.size, name.data);
+            }
+            print("\n");
+            
+            print("CoreDriver:\n"); // _BOOT_DRIVER_LIST_ENTRY 
+            for(u64 entry_guest_address = guest_read(u64, KeLoaderBlock + 0x50); entry_guest_address && (entry_guest_address != KeLoaderBlock + 0x50); entry_guest_address = guest_read(u64, entry_guest_address)){
+                
+                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 0x10);
+                
+                print("   %.*s\n", name.size, name.data);
+            }
+            print("\n");
+            
+            context->scratch_arena.current = current;
+            
             continue;
         }
         
