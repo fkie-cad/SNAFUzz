@@ -67,6 +67,13 @@
 //        
 //                                                                                           - Pascal Beyer 26.03.2024
 
+#ifdef TARGET_SOURCE
+#define TARGET_SOURCE_FILE stringify(TARGET_SOURCE)
+#else
+#define TARGET_SOURCE_FILE "default_target.c"
+#endif
+
+
 #define _CRT_SECURE_NO_WARNINGS
 
 #ifdef _WIN32
@@ -856,11 +863,7 @@ struct input get_random_input(struct memory_arena *arena, u64 *seed){
 #include "core_target_helpers.c"
 #include "target_specific_code_api.h"
 
-#ifdef TARGET_SOURCE
-#include stringify(TARGET_SOURCE)
-#else
-#include "default_target.c"
-#endif
+#include TARGET_SOURCE_FILE
 
 //_____________________________________________________________________________________________________________________
 // Thread context managing routines.
@@ -1641,6 +1644,8 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
     
     initialize_instruction_tables();
     
+    memset(frame_buffer, 0xff, sizeof(frame_buffer)); // All white!
+    
     // Some of this JIT stuff does not have to be initialized in snapshot mode.
     // But we will just initialize it anyway.
     struct context *context = os_allocate_memory(sizeof(*context));
@@ -1714,8 +1719,6 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         pthread_t ignored;
         pthread_create(&ignored, NULL, initialize_hacky_display, NULL);
 #endif
-        
-        memset(frame_buffer, 0xff, sizeof(frame_buffer)); // All white!
         
         if(start_in_debugger_mode) globals.single_stepping = 1;
         if(start_in_tracing_mode){

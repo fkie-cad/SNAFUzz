@@ -2,13 +2,14 @@
 // The snapshot file format.
 // 
 // Overview:
-//     header (magic, version)
+//     header (magic, version, target)
 //     directory [start, end]
 //     
 //     [0] disk state
 //     [1] vmbus state
 //     [2] registers
 //     [3] physical memory
+//     [4] frame buffer
 // 
 // Snapshots are written from the debugger using the 'snapshot <file-name>' command
 // and can be loaded as a parameter. The snapshot file and in particular the 
@@ -17,6 +18,7 @@
 
 static char snapshot_magic[32]   = "arstneio-snapshot";
 static char snapshot_version[32] = __DATE__ " " __TIME__;
+static char snapshot_target[0x200] = TARGET_SOURCE_FILE;
 
 int load_snapshot(struct context *context, char *file_name){
     
@@ -26,9 +28,9 @@ int load_snapshot(struct context *context, char *file_name){
     struct {
         u64 start_offset;
         u64 end_offset;
-    } directory[4] = {0};
+    } directory[5] = {0};
     
-    if(file.size < sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(directory)){
+    if(file.size < sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(snapshot_target) + sizeof(directory)){
         print("File '%s' is too small to be a snapshot file.\n", file_name);
         return 0;
     }
@@ -48,7 +50,17 @@ int load_snapshot(struct context *context, char *file_name){
         if(!should_load) return 0;
     }
     
-    memcpy(directory, file.memory + sizeof(snapshot_magic) + sizeof(snapshot_version), sizeof(directory));
+    if(memcmp(file.memory + sizeof(snapshot_magic) + sizeof(snapshot_version), snapshot_target, sizeof(snapshot_target)) != 0){
+        print("File '%s' was created with a different target file.\n", file_name);
+        print("    Current target: %.*s.\n", sizeof(snapshot_target), snapshot_target);
+        print("    File target: %.*s.\n", sizeof(snapshot_target), file.memory + sizeof(snapshot_magic));
+        print("\n");
+        
+        int should_load = yes_no_stop_point("Load anyway?", /*force*/0);
+        if(!should_load) return 0;
+    }
+    
+    memcpy(directory, file.memory + sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(snapshot_target), sizeof(directory));
     
     {
         int corrupt = -1;
@@ -238,6 +250,24 @@ int load_snapshot(struct context *context, char *file_name){
         memset(context->physical_memory_copied, 0xff, page_bitmap_size);
     }
     
+    if(directory[4].end_offset != directory[4].start_offset){
+        //
+        // Load the frame buffer memory.
+        // 
+        if(sizeof(frame_buffer) != directory[4].end_offset - directory[4].start_offset){
+            print("WARNING: Weird frame buffer size specified in snapshot.\n");
+            print("    Expected: '0x%x'.\n", sizeof(frame_buffer));
+            print("    Got:   '0x%x'.\n", directory[4].end_offset - directory[4].start_offset);
+            print("\n");
+            
+            int should_continue = yes_no_stop_point("Continue anyway?", /*force*/0);
+            if(!should_continue) return 0;
+        }else{
+            memcpy(frame_buffer, file.memory + directory[4].start_offset, directory[4].end_offset - directory[4].start_offset);
+        }
+    }
+    
+    
     print("Successfully loaded '%s'.\n", file_name);
     return 1;
 }
@@ -339,6 +369,8 @@ void write_snapshot(struct context *context, char *file_name){
     
     u64 physical_memory_size = globals.snapshot.physical_memory_size;
     
+    u64 frame_buffer_size = sizeof(frame_buffer);
+    
     // directory:
     //     u64 start_offset;
     //     u64 end_offset;
@@ -346,9 +378,10 @@ void write_snapshot(struct context *context, char *file_name){
     struct {
         u64 start_offset;
         u64 end_offset;
-    } directory[4] = {0};
+    } directory[5] = {0};
     
-    u64 current_offset = (64 + sizeof(directory) + 0x1ff) & ~0x1ff;
+    u64 header_size = sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(snapshot_target) + sizeof(directory);
+    u64 current_offset = (header_size + 0x1ff) & ~0x1ff;
     
     // Temporary write nodes.
     directory[0].start_offset = current_offset;
@@ -372,13 +405,18 @@ void write_snapshot(struct context *context, char *file_name){
     current_offset += physical_memory_size;
     directory[3].end_offset = current_offset;
     
+    directory[4].start_offset = current_offset;
+    current_offset += frame_buffer_size;
+    directory[4].end_offset = current_offset;
+    
     static u8 zero_buffer[0x1000];
     
     fwrite(snapshot_magic,   1, sizeof(snapshot_magic),   file);
     fwrite(snapshot_version, 1, sizeof(snapshot_version), file);
+    fwrite(snapshot_target,  1, sizeof(snapshot_target),  file);
     
     fwrite(directory, sizeof(directory), 1, file);
-    fwrite(zero_buffer, directory[0].start_offset - (64 + sizeof(directory)), 1, file);
+    fwrite(zero_buffer, directory[0].start_offset - header_size, 1, file);
     
     assert((u64)ftell64(file) == directory[0].start_offset);
     
@@ -513,6 +551,11 @@ void write_snapshot(struct context *context, char *file_name){
     fwrite(context->physical_memory, 1, context->physical_memory_size, file);
     
     assert((u64)ftell64(file) == directory[3].end_offset);
+    assert((u64)ftell64(file) == directory[4].start_offset);
+    
+    fwrite(frame_buffer, 1, sizeof(frame_buffer), file);
+    
+    assert((u64)ftell64(file) == directory[4].end_offset);
     
     fclose(file);
     
