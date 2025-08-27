@@ -7,9 +7,9 @@
 // 
 //    C:\Users\<User Name>\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
 //    
-// This drag and drop service only allows host to guest copying of files.
+// This drag and drop service only allows host-to-guest copying of files.
 // To get this executable into the guest either use an .iso (produced for example by oscdimg),
-// or use drag and drop supported by Hyper-V "extended session" (essentially using RDP).
+// or use the copy-and-paste supported by Hyper-V's "extended session" (essentially using RDP).
 // 
 //                                                        - Pascal Beyer 25.08.2025
 // 

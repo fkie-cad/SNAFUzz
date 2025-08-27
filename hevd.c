@@ -1,10 +1,91 @@
 // 
-// This is a simple demonstration of how target-specific code might look.
-// Compile this into the emulator using 'build.bat hevd.c'.
+// This is a simple demonstration of how target-specific code
+// for a kernel-mode target might look.
+// Compile this into the emulator using `build.bat hevd.c`.
 // 
 // Building target-specific code for HEVD.sys is definitely overkill
 // but maybe it will serve as an easy example.
-//                                             - Pascal Beyer 20.03.2023
+// 
+// For more general information on how to write target-specific code,
+// see the `target_specific_code_api.h` file in the `src` directory.
+// 
+// In this example, we are fuzzing the NtDeviceIoControlFile handler 
+// for the "HackSysExtremeVulnerableDriver":
+// 
+//     https://github.com/hacksysteam/HackSysExtremeVulnerableDriver
+//     
+// This is a Windows Kernel Driver that is intentionally very vulnerable.
+// 
+// To get the HackSysExtremeVulnerableDriver, either download the release version:
+// 
+//    curl -L https://github.com/hacksysteam/HackSysExtremeVulnerableDriver/releases/download/v3.00/HEVD.3.00.zip -o HEVD.zip
+//    unzip HEVD.zip -d HEVD
+//    
+// or build it yourself:
+//    
+//    git clone https://github.com/hacksysteam/HackSysExtremeVulnerableDriver.git --depth 1
+//    cd HackSysExtremeVulnerableDriver\Builder
+//    Build_HEVD_Vulnerable_x64.bat
+// 
+// To build it, you might have to install some things...
+// 
+// Copy the resulting HEVD.sys file into the virtual machine 
+// (either through the drag_and_drop.c service or by using Hyper-V).
+// You will also need the kernel_snapshot.exe utility, so also build that
+// and also copy it into the virtual machine.
+// 
+// Loading an unsigned driver on Windows is usually not allowed.
+// The easiest way to get around that is to patch the `CI!g_CiOptions` value.
+// You can do that in the builtin debugger of snafuzz, by using
+// 
+//    write CI!g_CiOptions 00 00 00 00
+//    
+// But don't let patch guard catch you ;) (If he does, it will blue screen)
+// 
+// To actually load the unsigned driver you have to create a service and then start it.
+// So inside of the guest, from an administrator command prompt execute
+// 
+//     sc create hevd binpath= <Full/Path/To/Hevd.sys> type= kernel
+//     sc start hevd
+//     
+// If this worked out, it should report back that the service is now RUNNING.
+// 
+// This target-specific file (hevd.c, the one you are reading right now),
+// expects you to take your snapshot using the `kernel_snapshot.c` utility.
+// To take a snapshot with this utiliy, set a breakpoint on 
+// `nt!NtSetInformationTransactionManager` in the builtin debugger 
+// and then execute the `kernel_snapshot.exe` inside of the guest.
+// 
+// This should trigger the breakpoint and you can take a snapshot by using
+// 
+//    snapshot hevd
+// 
+// and it will write a hevd.snaphshot. After that you can exit the hypervisor.
+// 
+// If you have not already done so, compile in this target file, by executing
+// 
+//    build.bat hevd.c
+//    
+// And now you can fuzz using `snafuzz hevd.snapshot --`.
+// If everything worked out correctly, it should spam a bunch of crashes.
+// 
+// If you have downloaded the pre-built version of hevd.sys, it is likely,
+// that there will be no debug symbols for your crashes.
+// This is because snafuzz was unable to locate the .pdb.
+// There are two ways to remedy this issue: 
+// 
+//    1. Put the PDB at the full path specified by the executable, 
+//       that would be:
+//           C:\projects\hevd\build\driver\vulnerable\x64\HEVD\HEVD.pdb
+//           
+//    2. Copy the pdb into the correct folder in the `symbols` directory.
+//       This would in this case be:
+//           <snafuzz-root>\symbols\HEVD.pdb\A31BAF7C-0402-4598-B9D0-BAEB8C4F26891\HEVD.pdb
+//           
+//       This path should also be printed when snafuzz reports that it could not
+//       find the .pdb
+// 
+//                                             - Pascal Beyer 27.08.2025
 // 
 
 struct input_metadata{
@@ -34,7 +115,7 @@ void target_initialize(struct context *context, int target_argc, char *target_ar
     (void)target_argc, (void)target_argv;
     
     
-    // We expect the .DMP state to be at the start of 'nt!NtSetInformationTransactionManager'
+    // We expect the .snapshot/.DMP state to be at the start of 'nt!NtSetInformationTransactionManager'
     // With 
     //    rcx = One page of memory.
     //    rdx = One page of memory.
@@ -101,7 +182,7 @@ void target_initialize(struct context *context, int target_argc, char *target_ar
     // Set up the 'DEFAULT_RETURN_RIP'.
     // This is a special value we use to signal _successful execution_.
     // If the guest ever executes 'DEFAULT_RETURN_RIP' we will exit 
-    // 'start_execution' with 'result.crash_type == CRASH_none'.
+    // 'start_execution_jit' with 'result.crash_type == CRASH_none'.
     // 
     guest_write(u64, context->registers.rsp, DEFAULT_RETURN_RIP); // return value
     
@@ -144,7 +225,7 @@ void target_initialize(struct context *context, int target_argc, char *target_ar
     target_globals.NtDeviceIoControlFile = get_symbol(context, string("nt!NtDeviceIoControlFile"));
     
     // 
-    // Provide and initial input for each ioctl.
+    // Provide an initial input for each ioctl.
     // 
     
     static int ioctls[] = {
@@ -233,10 +314,10 @@ struct input target_get_input(struct context *context, u64 *seed){
 
 // 
 // The 'target_execute_input' is supposed to actually perform the fuzzing.
-// It gets passed the inputs after they have been mutated by 'target_mutate_input'.
+// It gets passed the inputs after they have been mutated by 'target_get_input'.
 // 
-// The 'execution_result' return value should be obtained by a call to 'start_execution'.
-// If the 'execution_result.crash_type' is not `CRASH_none` the target will be reset to the snapshot.
+// The 'crash_infomation' return value should be obtained by a call to 'start_execution'.
+// If the 'crash_infomation.crash_type' is not `CRASH_none` the target will be reset to the snapshot.
 // If 'context->coverage_increase' is non-zero, the input will be atomically saved to 'globals.inputs'.
 // Crashes will only be added to 'globals.inputs' if either 'context->coverage_increase' is non-zero or 
 // the stack trace of the crash is unique.
@@ -270,6 +351,8 @@ struct crash_information target_execute_input(struct context *context, struct in
     guest_write(u64, context->registers.rsp + 0x40, metadata->input_size);
     guest_write(u64, context->registers.rsp + 0x48, target_globals.input_buffer + sizeof(*metadata) + metadata->input_size);
     guest_write(u64, context->registers.rsp + 0x50, metadata->output_size);
+    
+    // @note: The DEFAULT_RETURN_RIP is already set up by `target_initialize`.
     
     return start_execution_jit(context);
 }

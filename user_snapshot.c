@@ -1,3 +1,51 @@
+// 
+// This `user_snapshot` utility contains a small "debugger",
+// i.e. a program that uses the Windows Debugger Api's, 
+// that has the following command line:
+// 
+//     user_snapshot.exe <breakpoint offset> -- <target commandline>
+//     
+// To build the user_snapshot.exe simply use `cl user_snapshot.c`.
+// The `user_snapshot.exe` is then supposed to be run inside of the guest.
+// 
+// `user_snapshot.exe` starts up a process with the target commandline
+// and sets a breakpoint on the main executable plus the breakpoint offset.
+// It does so using a software breakpoint and then runs the process.
+// 
+// The builtin debugger of snafuzz ignores software breakpoints, 
+// therefore once the breakpoint is hit, this `user_snapshot.exe` utility
+// will get notified.
+// 
+// It will then lock the entire guest virtual address space of the process
+// and cause a hardware breakpoint, that snafuzz recognizes and breaks 
+// in its builtin debugger.
+// 
+// From here, you can use the builtin debugger, to take a snapshot of the
+// target.
+// 
+// If your target is simple enough that you simply have an `input_buffer`
+// and an `input_size`, that need to get mutated, the snapshot can then 
+// potentially be used with the `default_target.c`. 
+// For user space applications, the `default_target.c` has the following command line:
+// 
+//     snafuzz.exe fuzz.snapshot -- -buffer <input_buffer> -size <input_size> [-corpus <directory>] [-no_loop]
+// 
+// If you need something more sophisticated for your target,
+// also see the target-specific code in `HeaderParser.c`.
+// There I describe how to fuzz a user-space application in more detail.
+// 
+//                                            - Pascal Beyer 27.08.2025
+
+// 
+// In the future, this should probably be _more_ of a real debugger, 
+// so potentially use the DbgHelp API's to be able to resolve an address
+// like `headerParser!parseHeader` instead of having to pass an offset.
+// The problem with this is that the guest does not have internet and thus
+// cannot download the PDB's. Hmm...
+// 
+// Also maybe it should start per default on the main function 
+// or the entry point somehow.
+// 
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -9,7 +57,6 @@
 #include <psapi.h>
 
 #pragma comment(lib, "ntdll.lib")
-
 
 NTSYSAPI NTSTATUS NTAPI NtLockVirtualMemory(
         IN HANDLE               ProcessHandle,
@@ -37,9 +84,6 @@ int main(int argc, char *argv[]){
     }
     
     DWORD64 Offset = strtoull(argv[1], NULL, 0);
-    
-    print("Target Command Line %s\n", TargetCommandLine);
-    print("Offset 0x%llx\n", Offset);
     
     STARTUPINFO TargetStartupInformation = {.cb = sizeof(TargetStartupInformation) };
     PROCESS_INFORMATION TargetProcessInformation;
@@ -98,8 +142,6 @@ int main(int argc, char *argv[]){
     
     ThreadHandleMap[0].ThreadId     = InitialDebugEvent.dwThreadId;
     ThreadHandleMap[0].ThreadHandle = InitialDebugEvent.u.CreateProcessInfo.hThread;
-    print("hThread: %p %p\n", InitialDebugEvent.u.CreateProcessInfo.hThread, TargetProcessInformation.hThread);
-    print("thread: %x -> %p\n", InitialDebugEvent.dwThreadId, InitialDebugEvent.u.CreateProcessInfo.hThread);
     
     DEBUG_EVENT DebugEvent = InitialDebugEvent;
     
@@ -113,10 +155,7 @@ int main(int argc, char *argv[]){
             DWORD Index = ThreadHandleMapSize++;
             ThreadHandleMap[Index].ThreadId     = DebugEvent.dwThreadId;
             ThreadHandleMap[Index].ThreadHandle = DebugEvent.u.CreateThread.hThread;
-            print("thread: %x -> %p\n", DebugEvent.dwThreadId, DebugEvent.u.CreateThread.hThread);
         }
-        
-        print("DebugEvent.dwDebugEventCode %d 0x%x %p %p (%x)\n", DebugEvent.dwDebugEventCode, DebugEvent.u.Exception.ExceptionRecord.ExceptionCode, ExceptionAddress, TargetAddress, ExceptionAddress - ImageBase);
         
         if(DebugEvent.dwDebugEventCode == 1 && DebugEvent.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT && ExceptionAddress == TargetAddress){
             
@@ -150,8 +189,6 @@ int main(int argc, char *argv[]){
                 for(int Tries = 0; Tries < 10; Tries++){
                     NTSTATUS NtLockVirtualMemoryStatus = NtLockVirtualMemory(TargetProcessInformation.hProcess, &Address, &MemoryBasicInformation.RegionSize, /*MAP_PROCESS*/1);
                  
-                    print("NtLockVirtualMemoryStatus %x (%p, %p)\n", NtLockVirtualMemoryStatus, Address, Address + MemoryBasicInformation.RegionSize);
-                    
                     if(NtLockVirtualMemoryStatus != /*STATUS_WORKING_SET_QUOTA*/0xc00000a1) break;
                     
                     SIZE_T MinimumWorkingSetSize = 0;
@@ -189,8 +226,6 @@ int main(int argc, char *argv[]){
                 }
             }
             
-            print("hThread %p\n", hThread);
-            
             CONTEXT ThreadContext = {.ContextFlags = CONTEXT_ALL };
             
             BOOL GetThreadContextSuccesss = GetThreadContext(hThread, &ThreadContext);
@@ -203,8 +238,6 @@ int main(int argc, char *argv[]){
             ThreadContext.Dr0 = TargetAddress;
             ThreadContext.Dr7 |= 1;
             ThreadContext.ContextFlags = CONTEXT_ALL;
-            
-            print("Setting Rip %p, Dr0 %p.\n", ThreadContext.Rip, ThreadContext.Dr0);
             
             BOOL SetThreadContextSuccesss = SetThreadContext(hThread, &ThreadContext);
             if(!SetThreadContextSuccesss){

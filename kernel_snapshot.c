@@ -1,9 +1,14 @@
 // 
-// Kernel snapshot helper for the 'default_target.c'. Compile using 'cl kernel_snapshot.c'.
-// Set a breakpoint on 'nt!NtSetInformationTransactionManager' 
-// and execute 'kernel_snapshot.exe' on the Virtual Machine.
+// Kernel snapshot helper for the `default_target.c`. Compile using `cl kernel_snapshot.c`.
+// Set a breakpoint on `nt!NtSetInformationTransactionManager` 
+// and execute `kernel_snapshot.exe` on the Virtual Machine.
 // When the breakpoint hits, take a snapshot.
-//                                               - Pascal Beyer 13.08.2024
+// 
+// The `default_target.c` uses the fact that all kernel entries look the same.
+// It then changes rip to fuzz `nt!NtDeviceIoControlFile` instead of `nt!NtSetInformationTransactionManager`.
+// The reason to choose `nt!NtSetInformationTransactionManager`, is simply, that it is never called.
+// 
+//                                               - Pascal Beyer 27.08.2025
 
 #include <stdio.h>
 #include <windows.h>
