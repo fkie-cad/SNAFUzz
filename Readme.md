@@ -51,6 +51,9 @@ then you can use the resulting .vhdx to boot in Snapshot Mode.
 Installing and updating Windows 11 [requires](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements) 
 a Gen 2 VM with TPM enabled, at least 4 GiB Ram, at least 64 GB of disk space and at least 2 virtual cores.
 
+SNAFUzz has been tested to work both on an intel CPU (Core i7-9850H) and on an AMD cpu (AMD Ryzen 7), on Windows 11 and Windows 10 respectively 
+and can boot both Window 11 Professional and Home edition. But there are likely some CPU's / editions of Windows that do not work at this time.
+
 ## Fuzzing and target-specific code
 
 The command-line for the `snafuzz.exe` is split into two parts:
