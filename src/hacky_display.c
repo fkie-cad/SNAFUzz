@@ -162,7 +162,7 @@ LRESULT CALLBACK WindowCallback(HWND Window, UINT Message, WPARAM WParam, LPARAM
                 ['0'] = 0x0B, // 0 (zero) pressed
                 
                 [VK_OEM_MINUS] = 0x0C, // - pressed
-                // [] = 0x0D, // = pressed
+                [VK_OEM_PLUS] = 0x0D, // = pressed
                 [VK_BACK] = 0x0E, // backspace pressed
                 [VK_TAB]  = 0x0F, // tab pressed
                         
