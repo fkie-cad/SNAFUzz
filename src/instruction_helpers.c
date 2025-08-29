@@ -1261,8 +1261,8 @@ void helper_cpuid(struct context *context, struct registers *registers){
                 // EDX: Same as eax for the upper 32 bits of XCR0.
                 
                 rax = /*x87*/(1 << 0) | /*SSE*/(1 << 1) | /*AVX*/(1 << 2) | /*MPX((1 << 3) | (1 << 4))*/0;
-                rbx = 0x440;
-                rcx = 0x440;
+                rbx = 0x440; // Size for all enabled features. The os might have disabled some features.
+                rcx = 0x440; // Maximial size.
                 rdx = 0;
             }else if(rcx == 1){
                 rax = 0xf;   // xsaveopt, xsavec, xgetbv, xsaves/xrstors

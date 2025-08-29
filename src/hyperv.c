@@ -520,10 +520,12 @@ void start_execution_hypervisor(struct context *context){
     registers->gs.base = registers->gs_base;
     registers->fs.base = registers->fs_base;
     
-    
-    u32 xsave_area_size = 0; // @cleanup: There are cpuid for this kind of stuff.
-    if(globals.cpu_vendor == VENDOR_INTEL) xsave_area_size = sizeof(struct xsave_area);
-    if(globals.cpu_vendor == VENDOR_AMD)   xsave_area_size = sizeof(struct xsave_area) - sizeof((struct xsave_area){0}.padding);
+    u32 xsave_area_size = 0; 
+    WHvGetVirtualProcessorXsaveState(context->Partition, /*VpIndex*/0, null, 0, &xsave_area_size);
+    if(xsave_area_size > sizeof(struct xsave_area)){
+        print("This computer reports a bigger xsave area size than currently supported. (0x%x vs 0x%x)\n", xsave_area_size, sizeof(struct xsave_area));
+        os_panic(1);
+    }
     
     {
         // 
