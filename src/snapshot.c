@@ -40,6 +40,7 @@ int load_snapshot(struct context *context, char *file_name){
         return 0;
     }
     
+#if 0
     if(memcmp(file.memory + sizeof(snapshot_magic), snapshot_version, sizeof(snapshot_version)) != 0){
         print("File '%s' was created with a different version of the fuzzer.\n", file_name);
         print("    Current version: %.32s.\n", snapshot_version);
@@ -49,11 +50,12 @@ int load_snapshot(struct context *context, char *file_name){
         int should_load = yes_no_stop_point("Load anyway?", /*force*/0);
         if(!should_load) return 0;
     }
+#endif
     
     if(memcmp(file.memory + sizeof(snapshot_magic) + sizeof(snapshot_version), snapshot_target, sizeof(snapshot_target)) != 0){
         print("File '%s' was created with a different target file.\n", file_name);
         print("    Current target: %.*s.\n", sizeof(snapshot_target), snapshot_target);
-        print("    File target: %.*s.\n", sizeof(snapshot_target), file.memory + sizeof(snapshot_magic));
+        print("    File target: %.*s.\n", sizeof(snapshot_target), file.memory + sizeof(snapshot_magic) + sizeof(snapshot_version));
         print("\n");
         
         int should_load = yes_no_stop_point("Load anyway?", /*force*/0);
