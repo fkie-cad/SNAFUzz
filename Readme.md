@@ -1,7 +1,7 @@
 
 ## Overview
 
-_SNAFUzz_ is a snapshot-based fuzzer designed to attack the Windows kernel or userspace components.
+_SNAFUzz_ is a snapshot-based fuzzer designed to attack Windows kernel- or userspace-components.
 The system loosely consists of four components:
 - A custom hypervisor capable of booting Windows 11.
 - A deterministic full system emulator designed for snapshot fuzzing.
@@ -9,18 +9,25 @@ The system loosely consists of four components:
 - A framework for implementing target-specific input injection code.
 
 Snapshots can be produced by booting Windows 11 in the hypervisor, breaking in the builtin debugger and then using the `snapshot` debugger command 
-or from (specialized) [Kernel Memory Dumps](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/complete-memory-dump), which can be relatively easily produced by using WinDbg as a kernel debugger. 
-These snapshots are then loaded into the emulator. The emulator is a "full" system x64-emulator based on a JIT engine. 
+or from (specialized) [Kernel Memory Dumps](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/complete-memory-dump), which can be relatively easily created by using WinDbg as a kernel debugger. 
+These snapshots are then loaded into the emulator. The emulator is a "full" system x64-emulator, based on a JIT engine. 
 The JIT engine can be relatively simple, as we assume that both the host and the target are running x64 and we only JIT-compile one instruction at a time.
 The emulator is designed with the explicit goal of providing a good environment for fuzzing.
 
-As it is deterministic, any bug can be 100% accurately reproduced and root-caused in the debugger. 
+As the emulator is deterministic, any bug can be 100% accurately reproduced and root-caused in the builtin debugger. 
 The emulator also implements instruction-, branch- and compare-coverage, 
 as well as additional memory protections to catch off-by-one heap accesses, use-after-frees and double-frees.
 Because we emulate one instance of Windows per thread, execution speed scales almost linearly with cores and the system is designed to very quickly reset back to the snapshot.
 
-Versions of this tool have found multiple bugs including [CVE-2021-43247](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-43247), 
-[CVE-2023-23417](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2023-23417), [CVE-2023-33154](https://msrc.microsoft.com/update-guide/en-US/advisory/CVE-2023-33154), [CVE-2024-38127](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2024-38127), and another privilege escalation vulnerability in a popular 3rd-party driver.
+Versions of this tool have found multiple bugs including 
+[CVE-2021-43247](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-43247), 
+[CVE-2023-23417](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2023-23417), 
+[CVE-2023-33154](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2023-33154), 
+[CVE-2024-38127](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2024-38127),
+[CVE-2025-32715](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-32715),
+[CVE-2025-49661](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-49661), 
+[CVE-2025-49730](https://msrc.microsoft.com/update-guide/vulnerability/CVE-2025-49730),
+another privilege escalation vulnerability in a popular 3rd-party driver, and a remote code execution vulnerability in a pre-release version of the Microsoft RDP-Client.
 
 ## Snapshot Mode <a name="section-snapshot-mode"></a>
 
@@ -51,12 +58,9 @@ then you can use the resulting .vhdx to boot in Snapshot Mode.
 Installing and updating Windows 11 [requires](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements) 
 a Gen 2 VM with TPM enabled, at least 4 GiB Ram, at least 64 GB of disk space and at least 2 virtual cores.
 
-SNAFUzz has been tested to work both on an intel CPU (Core i7-9850H) and on an AMD cpu (AMD Ryzen 7), on Windows 11 and Windows 10 respectively 
-and can boot both Window 11 Professional and Home edition. But there are likely some CPU's / editions of Windows that do not work at this time.
-
 ## Fuzzing and target-specific code
 
-The command-line for the `snafuzz.exe` is split into two parts:
+The command-line for `snafuzz.exe` is split into two parts:
 ```
 snafuzz.exe <snapshot-options> -- <target-specific-code options>
 ```
@@ -75,10 +79,13 @@ The `kernel_snapshot.c` will allocate some memory, set the priority class to rea
 The `default_target.c` opens a handle to `<\Device\DeviceName>` by emulating a call to `nt!NtCreateFile` and then, during fuzzing, emulates calls
 to `nt!NtDeviceIoControlFile` using the allocated memory as `input_buffer` and `output_buffer`.
 
-The `user_snapshot.c` allows creating snapshots of a usermode program: `user_snapshot.exe <breakpoint offset> -- <target command line>`
+The `user_snapshot.c` allows creating snapshots of a usermode program: 
+```
+user_snapshot.exe <breakpoint offset> -- <target command line>
+```
 It is a small "debugger" which sets a software-breakpoint on the target address and once hit (the hypervisor ignores software breakpoints), 
 it locks all the entire address space, sets the priority class to real time and finally sets a hardware breakpoint on the target address.
-The hardware breakpoint will cause the hypervisor to break in the debugger, allowing us to take a snapshot.
+The hardware breakpoint will cause the hypervisor to break in the builtin debugger, allowing us to take a snapshot.
 
 If the target crashes a _.crash_-file will be saved in the `crashes` folder.
 If the target returns from `nt!NtDeviceIoControlFile` (or the function at rip in `user_snapshot.c`) the next call to it is generated. 
@@ -90,7 +97,9 @@ Inputs are based on a simple mutator (`apply_simple_mutations`) and coverage fee
 </p>
 
 For more complex targets you can specify target-specific code when building (also see the [Build](#Build) section). 
-An example for a kernel mode module is the `hevd.c` file and an example for a user-space application is `HeaderParser.c`.
+An example for fuzzing a kernel mode module is `hevd.c` and an example for fuzzing a user-space application is `HeaderParser.c`.
+Both of these target files also contain a big comment, that tutorializes using them.
+
 A target file allows you to run setup code and allows for target-specific mutation and execution code, 
 by requiring you to implement the following functions:
 
@@ -168,7 +177,7 @@ omitting an input, we can safely remove it from the .crash-file.
 
 ## Coverage visualization
 
-Periodically during fuzzing execution (or when using `write_coverage_files` in debugger mode), coverage files are written to the `coverage` folder.
+Periodically during fuzzing execution (or when using `write_coverage_files` in the builtin debugger), coverage files are written to the `coverage` folder.
 These are simple text files containing a list of all module-offsets hit during execution. 
 The Ghidra script `ColorHitInstructions.java` can be used to color all hit instructions gray.
 The script is based of [this](https://github.com/alephsecurity/general-research-tools/tree/master/ghidra_scripts/ColorInstructions) repository.
@@ -180,6 +189,10 @@ The script is based of [this](https://github.com/alephsecurity/general-research-
 ## Build
 
 Currently, the only supported platform is Windows and the only supported compiler is MSVC.
+
+SNAFUzz has been tested to work both on an intel CPU (Core i7-9850H and Core i7-1365U) and on an AMD cpu (AMD Ryzen 7), on Windows 11 and Windows 10 respectively 
+and can boot both Window 11 Professional and Home editions. But there are likely some CPU's / editions of Windows that do not work at this time.
+
 The build _should be_ as simple as using `build.bat` from an "x64 Native Tools Command Prompt" in the root directory of the project.
 Optionally, you can specify target-specific code in the form of a `target.c` file as the argument to `build.bat` (e.g `build.bat hevd.c`).
 The project is using a single compilation unit style build and therefore the `target.c` file is simply
@@ -194,6 +207,22 @@ Sometimes, to run the hypervisor the "Windows Hypervisor Platform" optional Wind
 <img src='images/enable_whp.png'>
 </p>
 
+### Linux
+
+Technically, there is a linux build (`build.sh`), but it is less tested and possibly unmaintained. On linux the hypervisor uses the KVM API's instead of the Windows Hypervisor Platform API's.
+These work quite a bit differantly and using SNAFUzz this way is way less tested. The JIT-based emulator backend should work more or less equivalently on linux,
+though there are also some internal differances.
+
+SNAFUzz on linux has only ever been tested inside the Windows Subsystem for Linux (WSL) using the [`nestedVirtualization`](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#main-wsl-settings).
+
+Too build SNAFUzz on linux, first install the dependencies (x11 is needed for the hypervisor, curl for downloading .pdb's from the Microsoft symbol server):
+```
+sudo apt install clang lld libx11-dev libcurl4-openssl-dev
+```
+and then run `./build.sh`.
+
+Running the builtin hypervisor, needs access to the KVM API's which are restricted.
+Furthermore, because the only disk format supported by SNAFUzz at this time is `.vhdx` getting a working virtual hard disk on linux is probably quite annoying.
 
 ## Internals
 
