@@ -209,11 +209,11 @@ Sometimes, to run the hypervisor the "Windows Hypervisor Platform" optional Wind
 
 ### Linux
 
-Technically, there is a linux build (`build.sh`), but it is less tested and possibly unmaintained. On linux the hypervisor uses the KVM API's instead of the Windows Hypervisor Platform API's.
-These work quite a bit differantly and using SNAFUzz this way is way less tested. The JIT-based emulator backend should work more or less equivalently on linux,
-though there are also some internal differances.
+Technically, there is a linux build (`build.sh`), but it is less tested and possibly unmaintained. On linux, the hypervisor uses the KVM API's instead of the Windows Hypervisor Platform API's.
+These work quite a bit differently and using SNAFUzz this way is way less tested. The JIT-based emulator backend should work more or less equivalently on linux,
+though there are also some internal differences.
 
-SNAFUzz on linux has only ever been tested inside the Windows Subsystem for Linux (WSL) using the [`nestedVirtualization`](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#main-wsl-settings).
+SNAFUzz on linux has only ever been tested inside the Windows Subsystem for Linux (WSL) using the [`nestedVirtualization`](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#main-wsl-settings) option.
 
 Too build SNAFUzz on linux, first install the dependencies (x11 is needed for the hypervisor, curl for downloading .pdb's from the Microsoft symbol server):
 ```
@@ -221,7 +221,7 @@ sudo apt install clang lld libx11-dev libcurl4-openssl-dev
 ```
 and then run `./build.sh`.
 
-Running the builtin hypervisor, needs access to the KVM API's which are restricted.
+Running the builtin hypervisor needs access to the KVM API's which are restricted to the kvm group.
 Furthermore, because the only disk format supported by SNAFUzz at this time is `.vhdx` getting a working virtual hard disk on linux is probably quite annoying.
 
 ## Internals
