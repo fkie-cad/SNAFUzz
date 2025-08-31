@@ -33,12 +33,16 @@
 // We use this PDB parser for three things:
 // 
 //    1) The debugger (and also symbolized stack traces and so on).
-//    2) To have ntoskrnl.exe independent '.DMP' loading. Things like the '_KPRCB' change with the kernel version.
+//    2) To have ntoskrnl-version independent snapshot/DMP loading. Things like the '_KPRCB' change with the kernel version.
 //    3) We use the .pdata and .xdata section from the .pdb. Crash uniqueness uses a stack trace hash.
 //
 // This PDB parser copies/linearizes all the streams inside the PDB, then finds and iterates the TPI and symbol record stream,
 // to build one 'pdb_hash_table' for types, one 'pdb_hash_table' for symbols, one 'pdb_hash_table' for constants,
 // one array for 'type index' to 'type record' and one array for 'rva' to 'symbol record' (see also 'struct pdb_context').
+// 
+// If you care about the internals of PDBs, maybe check out my PDB-Documentation repository:
+//     https://github.com/PascalBeyer/PDB-Documentation
+// 
 //                                                                          - Pascal Beyer 13.02.2023
 //                                                                                         16.02.2024
 
