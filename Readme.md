@@ -8,9 +8,10 @@ The system loosely consists of four components:
 - A builtin WinDbg-Style Debugger used to create snapshots and root-cause crashes.
 - A framework for implementing target-specific input injection code.
 
-Snapshots can be produced by booting Windows 11 in the hypervisor, breaking in the builtin debugger and then using the `snapshot` debugger command 
-or from (specialized) [Kernel Memory Dumps](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/complete-memory-dump), which can be relatively easily created by using WinDbg as a kernel debugger. 
-These snapshots are then loaded into the emulator. The emulator is a "full" system x64-emulator, based on a JIT engine. 
+Snapshots can be produced by booting Windows 11 in the hypervisor, breaking in the builtin debugger and then using the `snapshot` debugger command.
+Alternatively, (specialized) [Kernel Memory Dumps](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/complete-memory-dump) can be used as snapshots. 
+These can be relatively easily created by using WinDbg as a kernel debugger. 
+The snapshots are then loaded into the emulator. The emulator is a "full" system x64-emulator, based on a JIT engine. 
 The JIT engine can be relatively simple, as we assume that both the host and the target are running x64 and we only JIT-compile one instruction at a time.
 The emulator is designed with the explicit goal of providing a good environment for fuzzing.
 
@@ -51,7 +52,7 @@ In the following example, we first patch `CI!g_CiOptions` to allow us to load th
 
 ### Supported Versions of Windows
 
-Because the hypervisor uses a very incomplete implementation of UEFI (`uefi_bios.c`), not all version of Windows boot.
+Because the hypervisor uses a very incomplete implementation of UEFI ([`uefi_bios.c`](src/uefi_bios.c)), not all version of Windows boot.
 The main target is the [latest canary build of Windows 11](https://learn.microsoft.com/en-us/windows-insider/flight-hub/).
 Download the ISO, create a new Hyper-V virtual machine, disable "Checkpoints" (or merge the .avhdx after installing), install Windows 11 from the ISO, 
 then you can use the resulting .vhdx to boot in Snapshot Mode. 
@@ -65,7 +66,7 @@ The command-line for `snafuzz.exe` is split into two parts:
 snafuzz.exe <snapshot-options> -- <target-specific-code options>
 ```
 If the `--` is specified we are in fuzzing mode and all options after it are passed to the target-specific code. 
-The default "target-specific" code (`default_target.c`) has two modes
+The default "target-specific" code ([`default_target.c`](src/default_target.c)) has two modes
 ```
 C:\projects\snafuzz>snafuzz.exe snap.snapshot --
 ...
@@ -73,7 +74,7 @@ Default target usages:
     kernel_snapshot: <\Device\DeviceName> [ioctl...]
     user_snapshot: -buffer <input_buffer> -size <input_size> [-corpus <directory>]
 ```
-Which correspond to the two snapshotting-utilities `kernel_snapshot.c` and `user_snapshot.c`.
+Which correspond to the two snapshotting-utilities [`kernel_snapshot.c`](kernel_snapshot.c) and [`user_snapshot.c`](user_snapshot.c).
 
 The `kernel_snapshot.c` will allocate some memory, set the priority class to real time and then call into `nt!NtSetInformationTransactionManager`.
 The `default_target.c` opens a handle to `<\Device\DeviceName>` by emulating a call to `nt!NtCreateFile` and then, during fuzzing, emulates calls
@@ -97,7 +98,7 @@ Inputs are based on a simple mutator (`apply_simple_mutations`) and coverage fee
 </p>
 
 For more complex targets you can specify target-specific code when building (also see the [Build](#Build) section). 
-An example for fuzzing a kernel mode module is `hevd.c` and an example for fuzzing a user-space application is `HeaderParser.c`.
+An example for fuzzing a kernel mode module is [`hevd.c`](hevd.c) and an example for fuzzing a user-space application is [`HeaderParser.c`](HeaderParser.c).
 Both of these target files also contain a big comment, that tutorializes using them.
 
 A target file allows you to run setup code and allows for target-specific mutation and execution code, 
@@ -177,9 +178,9 @@ omitting an input, we can safely remove it from the .crash-file.
 
 ## Coverage visualization
 
-Periodically during fuzzing execution (or when using `write_coverage_files` in the builtin debugger), coverage files are written to the `coverage` folder.
+Periodically during fuzzing (or when using `write_coverage_files` in the builtin debugger), coverage files are written to the `coverage` folder.
 These are simple text files containing a list of all module-offsets hit during execution. 
-The Ghidra script `ColorHitInstructions.java` can be used to color all hit instructions gray.
+The Ghidra script [`ColorHitInstructions.java`](scripts/ColorHitInstructions.java) can be used to color all hit instructions gray.
 The script is based of [this](https://github.com/alephsecurity/general-research-tools/tree/master/ghidra_scripts/ColorInstructions) repository.
 
 <p align='center'>
@@ -226,14 +227,14 @@ Furthermore, because the only disk format supported by SNAFUzz at this time is `
 
 ## Internals
 
-The hypervisor (`hypervisor.c`) is implemented using the [Windows Hypervisor Platform APIs](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
-Devices are based on a custom implementation of the VMBUS (`vmbus.c`) and consist of a framebuffer, an SCSI-disk, a PS/2-keyboard and an absolutely positioned HID-mouse.
+The hypervisor ([`hyperv.c`](src/hyperv.c)/[`kvm.c`](src/kvm.c)) is implemented using the [Windows Hypervisor Platform APIs](https://learn.microsoft.com/en-us/virtualization/api/hypervisor-platform/hypervisor-platform).
+Devices are based on a custom implementation of the VMBUS ([`vmbus.c`](src/vmbus.c)) and consist of a framebuffer, an SCSI-disk, a PS/2-keyboard and an absolutely positioned HID-mouse.
 
-Guest physical memory (`memory_unit.c`) is simply virtual memory on the host. Each thread has its own copy of the physical memory, which gets copied in on first access and is reset by remembering dirty pages.
+Guest physical memory ([`memory_unit.c`](src/memory_unit.c)) is simply virtual memory on the host. Each thread has its own copy of the physical memory, which gets copied in on first access and is reset by remembering dirty pages.
 Guest virtual memory translations are cached in a TLB (Translation Lookaside Buffer). Extra-permission pages are looked up in a parallel page-table and are also cached in the TLB.
 The TLB is also used inside the JIT (Just-In-Time compiler) to speed up memory-lookups. 
 
-The JIT (`jit.c`) lifts basic blocks of guest instructions, changing each one to translate guest virtual memory and use a register struct instead of the host registers. 
+The JIT ([`jit.c`](src/jit.c)) lifts basic blocks of guest instructions, changing each one to translate guest virtual memory and use a register struct instead of the host registers. 
 No optimizations between instructions are implemented. Essentially, an instruction like `mov rcx, qword [rdx]` becomes:
 ```asm
 "mov rcx, qword [rdx]":
@@ -247,16 +248,16 @@ Lifted blocks are cached based on the physical page they start and end on and bl
 Calls to lifted blocks are "chained", by letting each block remember what they jumped to last time and check inside the JIT,
 whether they want to jump to the same address again. On a crash or timeout, the JIT simply sets `context->crash` and returns out.
 
-Coverage information (`coverage.c`) is collected while jitting instructions and compare- and branch-coverage work by emitting a special function calls before comparison- and conditional jump-instructions.
+Coverage information ([`coverage.c`](src/coverage.c)) is collected while jitting instructions and compare- and branch-coverage work by emitting a special function calls before comparison- and conditional jump-instructions.
 
-The debugger (`debugger.c`) consists of one big function (`handle_debugger`), which has to be called either by the JIT or the hypervisor, when they detect that a breakpoint was hit.
+The debugger ([`debugger.c`](src/debugger.c)) consists of one big function (`handle_debugger`), which has to be called either by the JIT or the hypervisor, when they detect that a breakpoint was hit.
 In the JIT, breakpoints work by clearing the JIT cache (meaning we have to re-jit everything) and inserting special code at the location of the breakpoint.
 In the hypervisor, breakpoints work by using the dr0-dr7 registers.
 
-Symbol support inside the debugger is based on a PDB parser (`pdb.c`) and the Microsoft [public symbol server](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols).
+Symbol support inside the debugger is based on a PDB parser ([`pdb.c`](src/pdb.c)) and the Microsoft [public symbol server](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/microsoft-public-symbols).
 PDBs are downloaded on demand, when they are needed for a module.
 
-The list of loaded modules (`loaded_module.c`) known to the debugger is based on `nt!PsLoadedModuleList` and `_PEB_LDR_DATA.InMemoryOrderModuleList`.
+The list of loaded modules ([`loaded_module.c`](src/loaded_module.c)) known to the debugger is based on `nt!PsLoadedModuleList` and `_PEB_LDR_DATA.InMemoryOrderModuleList`.
 
 For more information on the internals of any of these components please look at the corresponding source files. They each start with a comment explaining in detail, how the component works.
 
