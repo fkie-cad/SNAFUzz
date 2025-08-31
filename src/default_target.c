@@ -1,3 +1,19 @@
+// 
+// This is the default "target-specific" code.
+// If SNAFUzz is build without a `target.c`, i.e. simply using `build.bat`,
+// this file is used as the target-specific code.
+// 
+// If you want to understand how to write target-specific code, 
+// I would recommend first reading the `hevd.c` and `HeaderParser.c` target-files,
+// as well as the `target_specific_code_api.h` documentation/header-file.
+// 
+// The only thing not covered by the `hevd.c` and `HeaderParser.c` examples,
+// that is used in this file, is the `-double_fetch` stuff.
+// For that stuff, see the :default_target_double_fetch_detection tag.
+// 
+//                                                  - Pascal Beyer 31.08.2025
+// 
+
 
 #define INPUT_SIZE 0x400
 
@@ -365,7 +381,7 @@ struct input target_get_input(struct context *context, u64 *seed){
 
 // :default_target_double_fetch_detection
 // 
-// If `target_globals.enable_double_fetch_detection` is enabled, insead of writing in the input into the `target_globals.input_buffer`,
+// If `target_globals.enable_double_fetch_detection` is enabled, instead of writing in the input into the `target_globals.input_buffer`,
 // we register the `globals.input_buffer_physical_address`, which causes the system to call into the following routine:
 // 
 thread_local struct input current_input;
