@@ -137,10 +137,10 @@ If you have trouble creating a working .DMP-file, you can also try any of the ap
 * **Disable VBS**
   Virtualization Based Security is a Windows feature, where the kernel runs inside a thin virtual machine
   (the securekernel.exe). This means that while creating the DMP-file WinDbg cannot see the pages
-  belonging the the secure kernel. Furthermore, during execution, the guest will then try to call into the 
+  belonging the secure kernel. Furthermore, during execution, the guest will then try to call into the 
   secure kernel which we cannot emulate, as the pages are not in the .DMP-file.
   It seems this option is disabled by default. You can check if it is enabled using the "System Information". 
-  If it is, you can disable it using the the following commands from an administrator command prompt (and then restart):
+  If it is, you can disable it using the following commands from an administrator command prompt (and then restart):
   
 ```
 bcdedit /set hypervisorlaunchtype off
@@ -240,7 +240,7 @@ No optimizations between instructions are implemented. Essentially, an instructi
 "mov rcx, qword [rdx]":
     mov r8, [registers + .rdx]           ; Load the guest register into r8.
     call translate_guest_virtual_address ; Get the corresponding host address for the access.
-                                         ; This function will return out from the jit on failiure.
+                                         ; This function will return out from the jit on failure.
     mov rax, [rax]                       ; Perform the memory access.
     mov [registers + .rcx], rax          ; Write the resulting value into the guest registers.
 ```
@@ -261,3 +261,7 @@ The list of loaded modules ([`loaded_module.c`](src/loaded_module.c)) known to t
 
 For more information on the internals of any of these components please look at the corresponding source files. They each start with a comment explaining in detail, how the component works.
 
+## License
+
+SNAFUzz is licensed under the GNU Lesser General Public License version 3 (LGPL-3.0).
+This means that while any changes to the core system are subject to GPL restrictions, target-specific code is **not** and can be kept proprietary.
