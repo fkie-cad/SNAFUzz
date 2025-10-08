@@ -272,14 +272,6 @@ struct translation_lookaside_buffer{
     } entries[0x1000];
 };
 
-// We should never actually write to the vhdx, hence we use temporary buffers instead, these reset every fuzz run.
-struct vhdx_temporary_write_node{
-    struct vhdx_temporary_write_node *next;
-    u8 *buffer;
-    u64 logical_block_address;
-    u64 transfer_length_in_blocks;
-};
-
 // Thread local context structure, passed around to almost every function.
 struct context{
     
@@ -367,10 +359,8 @@ struct context{
         
         struct memory_arena fuzz_run_arena;
         
-        struct{
-            struct vhdx_temporary_write_node *first;
-            struct vhdx_temporary_write_node *last;
-        } temporary_write_nodes;
+        // We should never actually write to the vhdx, hence we use the temporary write table instead, this reset every fuzz run.
+        u64 temporary_write_table[0x200];
     };
     
     //
@@ -912,8 +902,7 @@ void reset_to_snapshot(struct context *context){
     context->fuzz_run_arena.current = context->fuzz_run_arena.base;
     
     // Reset the vhdx _write_ state.
-    context->temporary_write_nodes.first = null;
-    context->temporary_write_nodes.last  = null;
+    memset(context->temporary_write_table, 0, sizeof(context->temporary_write_table));
     
     //
     // Reset the extra permissions, these are cleared every new fuzz run.

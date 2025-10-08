@@ -1929,6 +1929,8 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             u64 logical_block_address   = registers->rdx;
             u64 transfer_size_in_blocks = (buffer_size + 0x1ff)/0x200;
             
+            if(PRINT_DISK_EVENTS) print("[Disk] Bios-Read 0x%x into %p from %p\n", transfer_size_in_blocks, buffer, logical_block_address);
+            
             u8 *sectors = vhdx_read_sectors(&context->scratch_arena, transfer_size_in_blocks, logical_block_address);
             
             if(context != globals.main_thread_context){
@@ -1947,11 +1949,12 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             u64 logical_block_address   = registers->rdx;
             u64 transfer_size_in_blocks = (buffer_size + 0x1ff)/0x200;
             
-            // @cleanup: Which arena do we want here?
-            u8 *buffer = push_data(&context->permanent_arena, u8, buffer_size);
+            if(PRINT_DISK_EVENTS) print("[Disk] Bios-Write 0x%x into %p from %p\n", transfer_size_in_blocks, guest_buffer, logical_block_address);
+            
+            u8 *buffer = push_data(&context->scratch_arena, u8, buffer_size); // @note: Gets copied in `vhdx_register_tempoary_write`.
             guest_read_size(context, buffer, guest_buffer, buffer_size, PERMISSION_read);
             
-            vhdx_push_temporary_write_node(context, &context->permanent_arena, buffer, logical_block_address, transfer_size_in_blocks);
+            vhdx_register_temporary_write(context, buffer, logical_block_address, transfer_size_in_blocks);
         }break;
         
         case /*MSR_POWER_CTL*/  0x1fc: msr_value = 0; break;

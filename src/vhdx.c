@@ -284,59 +284,71 @@ u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Se
     return ret;
 }
 
-void vhdx_push_temporary_write_node(struct context *context, struct memory_arena *arena, u8 *Buffer, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
-    struct vhdx_temporary_write_node *write_node = push_struct(arena, struct vhdx_temporary_write_node);
-    write_node->next   = null;
-    write_node->buffer = Buffer;
-    write_node->logical_block_address = LogicalBlockAddress;
-    write_node->transfer_length_in_blocks =TransferLengthInBlocks;
+
+static void *get_or_allocate_tempoary_write_block(struct context *context, u64 logical_block_address){
+    u32 page_indices[4] = {
+        (logical_block_address >> (39 - 12)) & 0x1ff,
+        (logical_block_address >> (30 - 12)) & 0x1ff,
+        (logical_block_address >> (21 - 12)) & 0x1ff,
+        (logical_block_address >> (12 - 12)) & 0x1ff,
+    };
     
-    if(context->temporary_write_nodes.last){
-        context->temporary_write_nodes.last = context->temporary_write_nodes.last->next = write_node;
-    }else{
-        context->temporary_write_nodes.last = context->temporary_write_nodes.first = write_node;
+    u64 *table = context->temporary_write_table;
+    for(u32 page_table_index = 0; page_table_index < array_count(page_indices)-1; page_table_index++){
+        u32 page_index = page_indices[page_table_index];
+        
+        if(!table[page_index]){
+            table[page_index] = (u64)push_data(&context->fuzz_run_arena, u64, 0x200);
+        }
+        
+        table = (u64 *)table[page_index];
+    }
+    
+    if(!table[page_indices[3]]){
+        table[page_indices[3]] = (u64)push_data(&context->fuzz_run_arena, u8, 0x200);
+    }
+    table = (u64 *)table[page_indices[3]];
+    
+    return table;
+}
+
+
+static void *get_tempoary_write_block(struct context *context, u64 logical_block_address){
+    u32 page_indices[4] = {
+        (logical_block_address >> (39 - 12)) & 0x1ff,
+        (logical_block_address >> (30 - 12)) & 0x1ff,
+        (logical_block_address >> (21 - 12)) & 0x1ff,
+        (logical_block_address >> (12 - 12)) & 0x1ff,
+    };
+    
+    u64 *table = context->temporary_write_table;
+    for(u32 page_table_index = 0; page_table_index < array_count(page_indices); page_table_index++){
+        u32 page_index = page_indices[page_table_index];
+        
+        if(!table[page_index]) return null;
+        
+        table = (u64 *)table[page_index];
+    }
+    
+    return table;
+}
+
+
+static void vhdx_register_temporary_write(struct context *context, u8 *Buffer, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
+    assert(globals.vhdx_info.sector_size_in_bytes == 0x200); // currently we assume this in `get_or_allocate_tempoary_write_block`.
+    
+    for(u64 BlockIndex = 0; BlockIndex < TransferLengthInBlocks; BlockIndex++){
+        u8 *block = get_or_allocate_tempoary_write_block(context, LogicalBlockAddress + BlockIndex);
+        memcpy(block, Buffer + globals.vhdx_info.sector_size_in_bytes * BlockIndex, globals.vhdx_info.sector_size_in_bytes);
     }
 }
 
-void vhdx_apply_temporary_writes(struct context *context, u8 *destination, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
+static void vhdx_apply_temporary_writes(struct context *context, u8 *destination, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
     
-    //
-    // Apply any temporary writes.
-    //
-    for(struct vhdx_temporary_write_node *node = context->temporary_write_nodes.first; node; node = node->next){
-        //
-        // node->buffer = [node->logical_block_address, node->logical_block_address + node->transfer_length_in_blocks)
-        // temp         = [LogicalBlockAddress, LogicalBlockAddress + TransferLengthInBlocks)
-        
-        //
-        // If there is no intersection, continue.
-        //
-        if(node->logical_block_address + node->transfer_length_in_blocks <= LogicalBlockAddress) continue;
-        if(LogicalBlockAddress + TransferLengthInBlocks <= node->logical_block_address) continue;
-        
-        if(node->logical_block_address <= LogicalBlockAddress){
-            // [node->buffer]
-            //      [destination        ]
-            
-            u64 OffsetInBlocks = LogicalBlockAddress - node->logical_block_address;
-            u64 OffsetInBytes  = OffsetInBlocks * globals.vhdx_info.sector_size_in_bytes;
-            
-            u64 SizeInBlocksLeft = node->transfer_length_in_blocks - OffsetInBlocks;
-            u64 SizeInBlocks = (SizeInBlocksLeft < TransferLengthInBlocks) ? SizeInBlocksLeft : TransferLengthInBlocks;
-            u64 SizeInBytes  = SizeInBlocks * globals.vhdx_info.sector_size_in_bytes;
-            
-            memcpy(destination, node->buffer + OffsetInBytes, SizeInBytes);
-        }else{
-            //      [node->buffer]
-            // [destination]
-            u64 OffsetInBlocks = node->logical_block_address - LogicalBlockAddress;
-            u64 OffsetInBytes  = OffsetInBlocks * globals.vhdx_info.sector_size_in_bytes;
-            
-            u64 SizeInBlocksLeft = TransferLengthInBlocks - OffsetInBlocks;
-            u64 SizeInBlocks = (SizeInBlocksLeft < node->transfer_length_in_blocks) ? SizeInBlocksLeft : node->transfer_length_in_blocks;
-            u64 SizeInBytes  = SizeInBlocks * globals.vhdx_info.sector_size_in_bytes;
-            
-            memcpy(destination + OffsetInBytes, node->buffer, SizeInBytes);
+    for(u64 BlockIndex = 0; BlockIndex < TransferLengthInBlocks; BlockIndex++){
+        u8 *block = get_tempoary_write_block(context, LogicalBlockAddress + BlockIndex);
+        if(block){
+            memcpy(destination + globals.vhdx_info.sector_size_in_bytes * BlockIndex, block, globals.vhdx_info.sector_size_in_bytes);
         }
     }
 }

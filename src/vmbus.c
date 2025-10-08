@@ -1079,7 +1079,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 crash_assert(packet_type == /*VM_PKT_DATA_USING_GPA_DIRECT*/9);
                                 
                                 u64 TransferLengthInBytes = TransferLengthInBlocks * globals.vhdx_info.sector_size_in_bytes;
-                                u8 *Buffer = push_data(&context->fuzz_run_arena, u8, TransferLengthInBytes); // @note: This needs to live until the end of the fuzz-run (or indefinitely if we are not fuzzing).
+                                u8 *Buffer = push_data(&context->scratch_arena, u8, TransferLengthInBytes); // @note: Gets copied in `vhdx_register_tempoary_write`.
                                 
                                 struct{
                                     u32 reserved;
@@ -1124,7 +1124,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     RangeOffset += 2 * sizeof(u32) + NumberOfPagesToRead * sizeof(u64);
                                 }
                                 
-                                vhdx_push_temporary_write_node(context, &context->fuzz_run_arena, Buffer, LogicalBlockAddress, TransferLengthInBlocks);
+                                vhdx_register_temporary_write(context, Buffer, LogicalBlockAddress, TransferLengthInBlocks);
                             }break;
                             
                             case 0x25:{ // READ CAPACITY (10)

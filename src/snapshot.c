@@ -79,13 +79,14 @@ int load_snapshot(struct context *context, char *file_name){
         }
     }
     
+    
     {   // 
         // Load the temporary write nodes.
         // 
         u64 *disk_section_start = (u64 *)(file.memory + directory[0].start_offset);
         
         // @cleanup: checks.
-        u64 amount_of_write_nodes  = disk_section_start[0];
+        u64 amount_of_blocks  = disk_section_start[0];
         u64 file_modification_time = disk_section_start[1];
         u64 full_file_path_size    = disk_section_start[2];
         u8 *full_file_path_data    = (u8 *)&disk_section_start[3]; // Needs to be zero terminated...
@@ -127,17 +128,17 @@ int load_snapshot(struct context *context, char *file_name){
             }
         }
         
-        u64 *write_nodes     = (u64 *)(full_file_path_data + ((full_file_path_size + /*zero-terminator*/1 + 7) & ~7));
-        u64 *write_nodes_end = write_nodes + 2 * amount_of_write_nodes;
+        u64 *logical_block_addresses     = (u64 *)(full_file_path_data + ((full_file_path_size + /*zero-terminator*/1 + 7) & ~7));
+        u64 *logical_block_addresses_end = logical_block_addresses + amount_of_blocks;
         
-        u8 *blocks_at = file.memory + ((((u8 *)write_nodes_end - file.memory) + 0x1ff) & ~0x1ff);
+        u8 *blocks_at = file.memory + ((((u8 *)logical_block_addresses_end - file.memory) + 0x1ff) & ~0x1ff);
         
-        for(u64 index = 0; index < amount_of_write_nodes; index++){
-            u64 logical_block_address     = write_nodes[2 * index + 0];
-            u64 transfer_length_in_blocks = write_nodes[2 * index + 1];
-            vhdx_push_temporary_write_node(context, &context->permanent_arena, blocks_at, logical_block_address, transfer_length_in_blocks);
+        for(u64 index = 0; index < amount_of_blocks; index++){
+            u64 logical_block_address = logical_block_addresses[index];
             
-            blocks_at += 0x200 * transfer_length_in_blocks;
+            vhdx_register_temporary_write(context, blocks_at, logical_block_address, 1);
+            
+            blocks_at += 0x200;
         }
     }
     
@@ -294,31 +295,60 @@ void write_snapshot(struct context *context, char *file_name){
     // 
     // Calculate the size for the 'temporary_write_nodes'.
     // 
-    u64 amount_of_write_nodes = 0;
-    u64 total_blocks = 0;
+    struct temporary_write_block{
+        u64 LogicalBlockAddress;
+        u8 *block;
+    } *write_blocks = push_data(&context->scratch_arena, struct temporary_write_block, 0);
     
-    for(struct vhdx_temporary_write_node *node = context->temporary_write_nodes.first; node; node = node->next){
-        amount_of_write_nodes += 1;
-        total_blocks += node->transfer_length_in_blocks;
+    for(u32 page0 = 0; page0 < 0x200; page0++){
+        
+        if(!context->temporary_write_table[page0]) continue;
+        
+        u64 *table1 = (u64 *)context->temporary_write_table[page0];
+        
+        for(u32 page1 = 0; page1 < 0x200; page1++){
+            
+            if(!table1[page1]) continue;
+            u64 *table2 = (u64 *)table1[page1];
+            
+            for(u32 page2 = 0; page2 < 0x200; page2++){
+                
+                if(!table2[page2]) continue;
+                
+                u64 *table3 = (u64 *)table2[page2];
+                
+                for(u32 page3 = 0; page3 < 0x200; page3++){
+                    
+                    if(!table3[page3]) continue;
+                    
+                    u64 LogicalBlockAddress = (page0 << (39 - 12)) | (page1 << (30 - 12)) | (page2 << (21 - 12)) | (page3 << (12 - 12));
+                    
+                    struct temporary_write_block *block = push_data(&context->scratch_arena, struct temporary_write_block, 1);
+                    block->LogicalBlockAddress = LogicalBlockAddress;
+                    block->block = (u8 *)table3[page3];
+                }
+            }
+        }
     }
     
+    u64 amount_of_write_blocks = push_data(&context->scratch_arena, struct temporary_write_block, 0) - write_blocks;
+    
     // disk write headers:
-    //     u64 amount_of_write_nodes;
+    //     u64 amount_of_blocks;
     //     u64 file_modification_time;
     //     u64 file_path_size;
     //     u8  file_path[(file_path_size + 7) & ~7];
     //     
-    // temporary_write_nodes:
+    // u64 block_addresses:
     //     u64 logical_block_address;
-    //     u64 transfer_length_in_blocks;
     //     
     // <blocks>
     
     struct string full_file_path = globals.vhdx_info.full_file_path;
     u8 aligned_path_size = ((full_file_path.size + /*zero-terminator*/1 + 7) & ~7);
     
-    u64 temporary_write_nodes_header_size = 3 * sizeof(u64) + aligned_path_size + 2 * sizeof(u64) * amount_of_write_nodes;
-    u64 temporary_write_nodes_size = ((temporary_write_nodes_header_size + 0x1ff) & ~0x1ff) + 0x200 * total_blocks;
+    u64 temporary_write_blocks_header_size = 3 * sizeof(u64) + aligned_path_size + sizeof(u64) * amount_of_write_blocks;
+    u64 temporary_write_blocks_size = ((temporary_write_blocks_header_size + 0x1ff) & ~0x1ff) + 0x200 * amount_of_write_blocks;
     
     // 
     // Calculate the size for the 'vmbus'.
@@ -387,7 +417,7 @@ void write_snapshot(struct context *context, char *file_name){
     
     // Temporary write nodes.
     directory[0].start_offset = current_offset;
-    current_offset += temporary_write_nodes_size;
+    current_offset += temporary_write_blocks_size;
     directory[0].end_offset = current_offset;
     
     // vmbus.
@@ -425,28 +455,21 @@ void write_snapshot(struct context *context, char *file_name){
     // 
     // Write the 'temporary_write_nodes'.
     // 
-    fwrite(&amount_of_write_nodes, sizeof(u64), 1, file);
+    fwrite(&amount_of_write_blocks, sizeof(u64), 1, file);
     fwrite(&globals.vhdx_info.file_modification_time, sizeof(u64), 1, file);
     fwrite(&full_file_path.size, sizeof(u64), 1, file);
     fwrite(full_file_path.data, full_file_path.size, 1, file);
     fwrite(zero_buffer, aligned_path_size - full_file_path.size, 1, file);
     
-    for(struct vhdx_temporary_write_node *node = context->temporary_write_nodes.first; node; node = node->next){
-        struct{
-            u64 logical_block_address;
-            u64 transfer_length_in_blocks;
-        } write_nodes = {
-            .logical_block_address     = node->logical_block_address,
-            .transfer_length_in_blocks = node->transfer_length_in_blocks,
-        };
-        fwrite(&write_nodes, sizeof(write_nodes), 1, file);
+    for(u64 index = 0; index < amount_of_write_blocks; index++){
+        fwrite(&write_blocks[index].LogicalBlockAddress, sizeof(write_blocks[index].LogicalBlockAddress), 1, file);
     }
     
-    u64 temporary_write_nodes_aligned_header_size = (temporary_write_nodes_header_size + 0x1ff) & ~0x1ff;
-    fwrite(zero_buffer, temporary_write_nodes_aligned_header_size - temporary_write_nodes_header_size, 1, file);
+    u64 temporary_write_nodes_aligned_header_size = (temporary_write_blocks_header_size + 0x1ff) & ~0x1ff;
+    fwrite(zero_buffer, temporary_write_nodes_aligned_header_size - temporary_write_blocks_header_size, 1, file);
     
-    for(struct vhdx_temporary_write_node *node = context->temporary_write_nodes.first; node; node = node->next){
-        fwrite(node->buffer, 0x200, node->transfer_length_in_blocks, file);
+    for(u64 index = 0; index < amount_of_write_blocks; index++){
+        fwrite(write_blocks[index].block, 1, 0x200, file);
     }
     
     assert((u64)ftell64(file) == directory[0].end_offset);
