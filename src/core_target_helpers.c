@@ -931,7 +931,7 @@ void lock_user_addressspace_range(struct context *context, u64 address_to_lock, 
         if(execution_result.crash_type || (registers->rax != 0 && registers->rax != /*STATUS_WORKING_SET_QUOTA*/0xc00000a1 && registers->rax != /*STATUS_WAS_LOCKED*/0x40000019)){
             print_result_status(context, "NtLockVirtualMemory");
             print("Failed while trying to lock user module %.*s address: %p size: 0x%llx\n", site.size, site.data, parameters.Address, parameters.Size);
-            os_panic(1);
+            // os_panic(1);
         }
         
         if(registers->rax == /*Success*/0 || registers->rax == /*STATUS_WAS_LOCKED*/0x40000019) break;
@@ -950,7 +950,7 @@ void lock_user_addressspace_range(struct context *context, u64 address_to_lock, 
         if(execution_result.crash_type || (registers->rax == 0)){
             print_result_status(context, "GetProcessWorkingSetSizeEx");
             print("Failed to GetProcessWorkingSetSizeEx for user module %.*s address: %p size: 0x%llx\n", site.size, site.data, parameters.Address, parameters.Size);
-            os_panic(1);
+            // os_panic(1);
         }
         
         guest_read_size(context, &parameters, parameter_address, sizeof(parameters), PERMISSION_read);
@@ -965,7 +965,7 @@ void lock_user_addressspace_range(struct context *context, u64 address_to_lock, 
         if(execution_result.crash_type || (registers->rax == 0)){
             print_result_status(context, "SetProcessWorkingSetSizeEx");
             print("Failed to SetProcessWorkingSetSizeEx for user module %.*s address: %p size: 0x%llx\n", site.size, site.data, parameters.Address, parameters.Size);
-            os_panic(1);
+            // os_panic(1);
         }
     }
     

@@ -3837,9 +3837,21 @@ void handle_debugger(struct context *context){
                 continue;
             }
             
-            int error = 0;
-            u64 IrpAddress = parse_address(context, &line, &error);
-            if(error) continue;
+            u64 IrpAddress;
+            if(!line.size){
+                u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
+                u64 cr3 = patch_in_kernel_cr3(context);
+                
+                u64 thread = guest_read(u64, kpcr   + get_member_offset(context, string("nt!_KPCR.Prcb.CurrentThread")));
+                IrpAddress = guest_read(u64, thread + get_member_offset(context, string("nt!_ETHREAD.IrpList"))) - get_member_offset(context, string("nt!_IRP.ThreadListEntry"));
+                
+                context->registers.cr3 = cr3; // @cleanup: Print the whole list?
+            }else{
+                int error = 0;
+                IrpAddress = parse_address(context, &line, &error);
+                if(error) continue;
+                
+            }
             
             print_irp(context, nt, IrpAddress);
             continue;
@@ -3859,7 +3871,15 @@ void handle_debugger(struct context *context){
             continue;
         }
         
-        if(string_match(command, string("handles"))){
+        if(string_match(command, string("handles")) || string_match(command, string("handle"))){
+            
+            u64 HandleToFind = 0;
+            
+            if(line.size){
+                int error = 0;
+                HandleToFind = parse_address(context, &line, &error);
+                if(error) continue;
+            }
             
             // 
             // Get the _HANDLE_TABLE of the current process.
@@ -3919,13 +3939,34 @@ void handle_debugger(struct context *context){
                         break;
                     }
                     
-                    if(handle_table_entry.ObjectPointerBits){
-                        u64 ObjectPointer = (handle_table_entry.ObjectPointerBits << 4) | (0xffffull << 48);
-                        print("[0x%llx] Object: %p handle info: %p\n", handle_index, ObjectPointer, handle_information);
-                    }else{
-                        print("[0x%llx] handle info: %p\n", handle_index, handle_information);
+                    if(HandleToFind == 0 || HandleToFind == handle_index){
+                        if(handle_table_entry.ObjectPointerBits){
+                            u64 ObjectHeaderPointer = ((handle_table_entry.ObjectPointerBits << 4) | (0xffffull << 48));
+                            print("[0x%llx] ObjectHeader: %p handle info: %p ", handle_index, ObjectHeaderPointer, handle_information);
+                            
+                            u64 ObjectPointer = ObjectHeaderPointer + get_member_offset(context, string("nt!_OBJECT_HEADER.Body"));
+                            u8 ObjectHeaderTypeIndex = guest_read(u8, ObjectHeaderPointer + get_member_offset(context, string("nt!_OBJECT_HEADER.TypeIndex")));
+                            
+                            u8 ObjectHeaderCookie = guest_read(u8, get_symbol(context, string("nt!ObHeaderCookie")));
+                            
+                            ObjectHeaderTypeIndex = ObjectHeaderTypeIndex ^ ObjectHeaderCookie ^ (u8)(ObjectHeaderPointer >> 8); // Xor encoded to prevent some exploit technique.
+                            
+                            u64 ObTypeIndexTable = get_symbol(context, string("nt!ObTypeIndexTable"));
+                            u64 ObjectType = guest_read(u64, ObTypeIndexTable + 8 * ObjectHeaderTypeIndex);
+                            
+                            struct string ObjectTypeName = guest_read_unicode_string(context, &context->scratch_arena, ObjectType + get_member_offset(context, string("nt!_OBJECT_TYPE.Name")));
+                            print("(%.*s", ObjectTypeName.size, ObjectTypeName.data);
+                            
+                            if(string_match(ObjectTypeName, string("File"))){
+                                struct string FileName = guest_read_unicode_string(context, &context->scratch_arena, ObjectPointer + get_member_offset(context, string("nt!_FILE_OBJECT.FileName")));
+                                print(" %.*s)\n", FileName.size, FileName.data);
+                            }else{
+                                print(")\n");
+                            }
+                        }else{
+                            print("[0x%llx] handle info: %p\n", handle_index, handle_information);
+                        }
                     }
-                    
                 }
                 
                 HandleTableListEntry = guest_read(u64, HandleTableListEntry);

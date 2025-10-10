@@ -93,7 +93,7 @@ void target_initialize(struct context *context, int target_argc, char *target_ar
         }else{
             
             size_t device_string_length = strlen(device_string);
-            if( 2 * (device_string_length + 1) > 0xffff){
+            if(2 * (device_string_length + 1) > 0xffff){
                 print("Error: Device string provided to default target is too long.\n");
                 os_panic(1);
             }
