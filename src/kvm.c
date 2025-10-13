@@ -669,17 +669,32 @@ void start_execution_hypervisor(struct context *context){
             
             kvm_run->kvm_dirty_regs |= KVM_SYNC_X86_SREGS;
             
+            
+            {   // 
+                // Load xcr0.
+                // 
+                struct kvm_xcrs xcrs = {
+                    .nr_xcrs = 1,
+                    .flags = 0,
+                    .xcrs[0] = {.xcr = 0, .value = registers->xcr0 },
+                };
+                
+                if(ioctl(vcpu_fd, KVM_SET_XCRS, &xcrs) < 0){
+                    perror("KVM_SET_XCRS");
+                    exit(1);
+                }
+            }
+            
             // 
-            // Load the floating point registers
+            // Load the floating point registers.
             // 
             xsave.xsave_area = xsave_area_from_registers(registers);
-            
+            xsave.xsave_area.xcomp_bv = 0;  // It does not like this one for whatever reason, not sure if it ever matters?
             
             if(ioctl(vcpu_fd, KVM_SET_XSAVE, &xsave.kvm_xsave) < 0){
                 perror("KVM_SET_XSAVE");
                 exit(1);
             }
-            
             
 #if 0
             {
@@ -701,21 +716,6 @@ void start_execution_hypervisor(struct context *context){
                 }
             }
 #endif
-            
-            {   // 
-                // Load cr0.
-                // 
-                struct kvm_xcrs xcrs = {
-                    .nr_xcrs = 1,
-                    .flags = 0,
-                    .xcrs[0] = {.xcr = 0, .value = registers->xcr0 },
-                };
-                
-                if(ioctl(vcpu_fd, KVM_SET_XCRS, &xcrs) < 0){
-                    perror("KVM_SET_XCRS");
-                    exit(1);
-                }
-            }
             
             first_time = 0;
         }
@@ -1360,6 +1360,17 @@ void start_execution_hypervisor(struct context *context){
                                 }else{
                                     set_crash_information(context, CRASH_internal_error, (u64)"Unhandled connection id in HvCallSignalEvent.");
                                 }
+                            }break;
+                            
+                            case /*HvExtCallQueryCapabilities*/0x8001:{
+                                crash_assert(!fast);
+                                
+                                u64 output_gpa = out_param;
+                                
+                                crash_assert(output_gpa + 7 < context->physical_memory_size);
+                                
+                                *(u64 *)get_physical_memory_for_write(context, output_gpa) = 0;
+                                registers->rax = 0;
                             }break;
                             
                             default:{

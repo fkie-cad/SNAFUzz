@@ -180,12 +180,16 @@ void target_reset__default(struct context *context){
 // 
 int target_read_guest_input_buffer(struct context *context, u64 virtual_address, u8 *buffer, u64 size);
 
-// The default implementation simply crashes.
 #if _WIN32
 #pragma comment(linker, "/ALTERNATENAME:target_read_guest_input_buffer=target_read_guest_input_buffer__default")
 #endif
-void target_read_guest_input_buffer__default(struct context *context){
+
+// The default implementation simply crashes.
+void target_read_guest_input_buffer__default(struct context *context, u64 virtual_address, u8 *buffer, u64 size){
     (void)context; 
+    (void)virtual_address;
+    (void)buffer;
+    (void)size;
     not_implemented();
 }
 

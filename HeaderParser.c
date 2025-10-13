@@ -89,7 +89,7 @@
 //    I don't really see any reason not to put these 'info_levels' all to 0xffffffff.
 // 
 
-__declspec(thread) struct{
+thread_local struct{
     struct input current_input;
     s64 current_offset;
 } thread_locals;
@@ -168,7 +168,7 @@ void target_initialize(struct context *context, int target_argc, char *target_ar
     (void)target_argv;
     
     FUZZ_CASES_BEFORE_RESET = 1;
-    FUZZ_CASE_TIMEOUT = 4'000'000;
+    FUZZ_CASE_TIMEOUT = 4000000;
     
     struct registers *registers = &context->registers;
     

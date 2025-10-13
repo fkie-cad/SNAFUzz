@@ -818,6 +818,7 @@ void set_next_timer_interrupt_time(struct context *context, struct registers *re
 //_____________________________________________________________________________________________________________________
 // Input handling routines.
 
+// WARNING: also defined in 'linux_weak_aliases.c'.
 struct input{
     u8 *data;
     s64 size;
