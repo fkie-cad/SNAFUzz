@@ -643,16 +643,31 @@ struct globals{
     } snapshot;
     
     struct{
-        u8 *mapped_address;
         u64 amount_of_bat_table_entries;
         u64 *block_allocation_table;
         u64 sectors_per_block;
-        u64 sector_size_in_bytes;
         u64 chunk_ratio;
-        u64 virtual_disk_size;
-        u64 file_modification_time;
-        struct string full_file_path;
     } vhdx_info;
+    
+    struct{
+        u64 cluster_size;
+        u64 L2_entries;
+        u64 *L1_table;
+    } qcow2_info;
+    
+    struct{
+        enum virtual_disk_kind{
+            VIRTUAL_DISK_none,
+            VIRTUAL_DISK_vhdx,
+            VIRTUAL_DISK_qcow2,
+        } virtual_disk_kind;
+        
+        u8 *mapped_address;
+        u64 virtual_size;
+        u64 modification_time;
+        u64 sector_size_in_bytes;
+        struct string full_file_path;
+    } disk_info;
     
     struct context *main_thread_context;
     
@@ -715,6 +730,8 @@ struct crash_information start_execution_jit(struct context *context);
 void handle_debugger(struct context *context);
 
 #include "vhdx.c"
+#include "qcow2.c"
+#include "disk.c"
 
 #include "apic.c"
 #include "memory_unit.c"
@@ -1354,7 +1371,7 @@ int main(int argc, char *argv[]){
             return 1;
         }
         
-
+        
         // :calculate_tsc_frequency_because_windows_wont_tell_me
         // 
         // Start a "timer" to messure the frequency of __rdtsc as windows is not willing to tell me.
@@ -1381,6 +1398,7 @@ int main(int argc, char *argv[]){
         print("\n");
         print("disk-formats:\n");
         print("    .vhdx\n");
+        print("    .qcow2\n");
         print("\n");
         print("snapshot-formats:\n");
         print("    .dmp\n");
@@ -1410,6 +1428,7 @@ int main(int argc, char *argv[]){
     
     // Disk options:
     char *vhdx_file_name = null;
+    char *qcow2_file_name = null;
     
     // Snapshot options:
     char *vmrs_file_name = null;
@@ -1532,6 +1551,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         option(dmp);
         option(snapshot);
         option(vhdx);
+        option(qcow2);
         
 #undef option
         
@@ -1643,10 +1663,22 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
     context->thread_index = -1;
     context->fuzz_case_timeout = 0x7fffffffffffffff; // @note: make sure the main thread never _times out_.
     
-    if(vhdx_file_name){
+    if(vhdx_file_name && qcow2_file_name){
+        print("Error: More than one virtual disk specified, currently not supported.\n");
+        print("       Disks:\n");
+        print("            %s\n", vhdx_file_name);
+        print("            %s\n", qcow2_file_name);
+        return 1;
+    }
+    
+    char *disk_file_name = null;
+    if(vhdx_file_name)  disk_file_name =  vhdx_file_name;
+    if(qcow2_file_name) disk_file_name = qcow2_file_name;
+    
+    if(disk_file_name){
         // Parse the disk device.
-        int parse_vhdx_success = parse_vhdx(vhdx_file_name);
-        if(!parse_vhdx_success) return 1;
+        int parse_disk_success = parse_disk(disk_file_name);
+        if(!parse_disk_success) return 1;
     }
     
     // 
@@ -1667,7 +1699,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         int success = parse_dmp(context, dmp_file_name);
         if(!success) return 1;
     }else{
-        if(!vhdx_file_name){
+        if(!disk_file_name){
             print("Error: Neither a disk nor a snapshot format specified.\n");
             return 1;
         }

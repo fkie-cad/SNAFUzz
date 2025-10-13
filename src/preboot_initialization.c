@@ -242,7 +242,7 @@ int efi_setup_initial_state(struct context *context){
         // and the 'size_in_lba'.
         // 
         
-        u8 *master_boot_record = vhdx_read_sectors(&context->scratch_arena, 1, 0);
+        u8 *master_boot_record = disk_read_sectors(&context->scratch_arena, 1, 0);
         
         u8  boot_indicator = master_boot_record[446];
         u8  os_indicator   = master_boot_record[450];
@@ -271,7 +271,7 @@ int efi_setup_initial_state(struct context *context){
                 u32 entry_size;
                 u32 crc32;
             } partition_entry_array;
-        } *gpt_header = (void *)vhdx_read_sectors(&context->scratch_arena, 1, starting_lba);
+        } *gpt_header = (void *)disk_read_sectors(&context->scratch_arena, 1, starting_lba);
         
         print("disk guid " PRINT_GUID_FORMAT "\n", PRINT_GUID_MEMBERS(gpt_header->disk_guid));
         
@@ -287,7 +287,7 @@ int efi_setup_initial_state(struct context *context){
             u64 attributes;
             
             u16 partition_name[36];
-        } *partition_table_entry = (void *)vhdx_read_sectors(&context->scratch_arena, partition_table_size_in_sectors, gpt_header->partition_entry_array.starting_lba);
+        } *partition_table_entry = (void *)disk_read_sectors(&context->scratch_arena, partition_table_size_in_sectors, gpt_header->partition_entry_array.starting_lba);
         
         struct guid_partition_table_entry *efi_system_partition_entry = null;
         
@@ -320,7 +320,7 @@ int efi_setup_initial_state(struct context *context){
         //   7 - Backup FSInfo
         //   
         
-        u8 *fat32_boot_sector = vhdx_read_sectors(&context->scratch_arena, 1, efi_system_partition_entry->starting_lba);
+        u8 *fat32_boot_sector = disk_read_sectors(&context->scratch_arena, 1, efi_system_partition_entry->starting_lba);
         u16 bytes_per_sector    = *(u16 *)(fat32_boot_sector + 11);
         u8  sectors_per_cluster = *(u8  *)(fat32_boot_sector + 13);
         u16 number_of_reserved_logical_sector = *(u16 *)(fat32_boot_sector + 14);
@@ -335,7 +335,7 @@ int efi_setup_initial_state(struct context *context){
         
         u64 user_area_start_sector = efi_system_partition_entry->starting_lba + number_of_reserved_logical_sector + number_of_file_allocation_tables * number_of_sectors_per_file_allocation_table;
         
-        u8 *fat32_root_directory = vhdx_read_sectors(&context->scratch_arena, sectors_per_cluster, user_area_start_sector);
+        u8 *fat32_root_directory = disk_read_sectors(&context->scratch_arena, sectors_per_cluster, user_area_start_sector);
         
         struct fat32_directory_entry{
             u8 name[11];
@@ -380,7 +380,7 @@ int efi_setup_initial_state(struct context *context){
             
             u32 cluster_number = (directory->first_data_cluster_number_high << 16) | directory->first_data_cluster_number_low;
             
-            directory = (void *)vhdx_read_sectors(&context->scratch_arena, sectors_per_cluster, user_area_start_sector + (cluster_number - 2) * sectors_per_cluster);
+            directory = (void *)disk_read_sectors(&context->scratch_arena, sectors_per_cluster, user_area_start_sector + (cluster_number - 2) * sectors_per_cluster);
         }
         
         if(found){
@@ -393,7 +393,7 @@ int efi_setup_initial_state(struct context *context){
         u32 amount_of_sectors = (boot_file_size + 0x1ff) / 0x200;
         u32 cluster_number    = (directory->first_data_cluster_number_high << 16) | directory->first_data_cluster_number_low;
         
-        boot_file_data = vhdx_read_sectors(&context->scratch_arena, amount_of_sectors, user_area_start_sector + (cluster_number - 2) * sectors_per_cluster);
+        boot_file_data = disk_read_sectors(&context->scratch_arena, amount_of_sectors, user_area_start_sector + (cluster_number - 2) * sectors_per_cluster);
     }
     
     struct file bios_file = load_file("build/bios.exe");

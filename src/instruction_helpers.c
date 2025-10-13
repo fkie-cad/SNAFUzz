@@ -1931,14 +1931,14 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             
             if(PRINT_DISK_EVENTS) print("[Disk] Bios-Read 0x%x into %p from %p\n", transfer_size_in_blocks, buffer, logical_block_address);
             
-            u8 *sectors = vhdx_read_sectors(&context->scratch_arena, transfer_size_in_blocks, logical_block_address);
+            u8 *sectors = disk_read_sectors(&context->scratch_arena, transfer_size_in_blocks, logical_block_address);
             
             if(context != globals.main_thread_context){
                 // First apply the writes which were applied prior to fuzzing.
-                vhdx_apply_temporary_writes(globals.main_thread_context, sectors, logical_block_address, transfer_size_in_blocks);
+                disk_apply_temporary_writes(globals.main_thread_context, sectors, logical_block_address, transfer_size_in_blocks);
             }
             
-            vhdx_apply_temporary_writes(context, sectors, logical_block_address, transfer_size_in_blocks);
+            disk_apply_temporary_writes(context, sectors, logical_block_address, transfer_size_in_blocks);
             
             guest_write_size(context, sectors, buffer, buffer_size);
         }break;
@@ -1954,7 +1954,7 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             u8 *buffer = push_data(&context->scratch_arena, u8, buffer_size); // @note: Gets copied in `vhdx_register_tempoary_write`.
             guest_read_size(context, buffer, guest_buffer, buffer_size, PERMISSION_read);
             
-            vhdx_register_temporary_write(context, buffer, logical_block_address, transfer_size_in_blocks);
+            disk_register_temporary_write(context, buffer, logical_block_address, transfer_size_in_blocks);
         }break;
         
         case /*MSR_POWER_CTL*/  0x1fc: msr_value = 0; break;

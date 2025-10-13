@@ -33,8 +33,8 @@ another privilege escalation vulnerability in a popular 3rd-party driver, and a 
 ## Snapshot Mode <a name="section-snapshot-mode"></a>
 
 Two different modes are implemented, a _Snapshot Mode_ and the _Fuzzing Mode_. Snapshot Mode uses the hypervisor and we emulate a framebuffer, a disk, a mouse and, a keyboard
-to essentially provide the interface you would expect from a virtual machine. All writes to the disk will be temporary and will not be applied to the vhdx.
-To boot from a virtual disk (.vhdx) simply use: `snafuzz.exe <.vhdx-file>`. 
+to essentially provide the interface you would expect from a virtual machine. All writes to the disk will be temporary and will not be applied to the virtual disk.
+To boot from a virtual disk (.vhdx or .qcow2) simply use: `snafuzz.exe <disk-file>`.
 Once booted, you can take a snapshot by using `CTRL-C` inside the command prompt to break in the debugger and use the `snapshot` command.
 The `.snapshot`-file can then also be used to reload the system using it as the argument: `snafuzz.exe <.snapshot-file>`.
 
@@ -55,7 +55,7 @@ In the following example, we first patch `CI!g_CiOptions` to allow us to load th
 Because the hypervisor uses a very incomplete implementation of UEFI ([`uefi_bios.c`](src/uefi_bios.c)), not all version of Windows boot.
 The main target is the [latest canary build of Windows 11](https://learn.microsoft.com/en-us/windows-insider/flight-hub/).
 Download the ISO, create a new Hyper-V virtual machine, disable "Checkpoints" (or merge the .avhdx after installing), install Windows 11 from the ISO, 
-then you can use the resulting .vhdx to boot in Snapshot Mode. 
+then you can use the resulting .vhdx to boot in Snapshot Mode.
 Installing and updating Windows 11 [requires](https://learn.microsoft.com/en-us/windows/whats-new/windows-11-requirements) 
 a Gen 2 VM with TPM enabled, at least 4 GiB Ram, at least 64 GB of disk space and at least 2 virtual cores.
 
@@ -191,7 +191,7 @@ The script is based of [this](https://github.com/alephsecurity/general-research-
 
 Currently, the only supported platform is Windows and the only supported compiler is MSVC.
 
-SNAFUzz has been tested to work both on an intel CPU (Core i7-9850H and Core i7-1365U) and on an AMD cpu (AMD Ryzen 7), on Windows 11 and Windows 10 respectively 
+SNAFUzz has been tested to work both on an intel CPU (Core i7-9850H and Core i7-1365U) and on an AMD cpu (AMD Ryzen 7 2700), on Windows 11 and Windows 10 respectively 
 and can boot both Window 11 Professional and Home editions. But there are likely some CPU's / editions of Windows that do not work at this time.
 
 The build _should be_ as simple as using `build.bat` from an "x64 Native Tools Command Prompt" in the root directory of the project.
@@ -223,7 +223,6 @@ sudo apt install clang lld libx11-dev libcurl4-openssl-dev
 and then run `./build.sh`.
 
 Running the builtin hypervisor needs access to the KVM API's which are restricted to the kvm group.
-Furthermore, because the only disk format supported by SNAFUzz at this time is `.vhdx` getting a working virtual hard disk on linux is probably quite annoying.
 
 ## Internals
 

@@ -94,11 +94,11 @@ int load_snapshot(struct context *context, char *file_name){
         if(full_file_path_size){
             int skip_file_modification_time_check = false;
             
-            if(!globals.vhdx_info.mapped_address){
+            if(!globals.disk_info.mapped_address){
                 // 
                 // We have not loaded the 'vhdx' yet, load it from this information.
                 // 
-                int parse_vhdx_success = parse_vhdx((char *)full_file_path_data);
+                int parse_vhdx_success = parse_disk((char *)full_file_path_data);
                 
                 if(!parse_vhdx_success){
                     int should_continue = yes_no_stop_point("Continue anyway?", /*force*/0);
@@ -108,10 +108,10 @@ int load_snapshot(struct context *context, char *file_name){
                 // if(!parse_vhdx_success) return 0;
             }else{
                 
-                if(!string_match((struct string){.data = (char *)full_file_path_data, .size = full_file_path_size}, globals.vhdx_info.full_file_path)){
+                if(!string_match((struct string){.data = (char *)full_file_path_data, .size = full_file_path_size}, globals.disk_info.full_file_path)){
                     print("Snapshot '%s' specifies a different disk than was loaded.\n", file_name);
                     print("    Snapshot-disk: '%.*s'.\n", full_file_path_size, full_file_path_data);
-                    print("    Loaded-disk:   '%.*s'.\n", globals.vhdx_info.full_file_path.size, globals.vhdx_info.full_file_path.data);
+                    print("    Loaded-disk:   '%.*s'.\n", globals.disk_info.full_file_path.size, globals.disk_info.full_file_path.data);
                     print("\n");
                     
                     int should_continue = yes_no_stop_point("Continue?", /*force*/0);
@@ -121,7 +121,7 @@ int load_snapshot(struct context *context, char *file_name){
                 }
             }
             
-            if(!skip_file_modification_time_check && (file_modification_time != globals.vhdx_info.file_modification_time)){
+            if(!skip_file_modification_time_check && (file_modification_time != globals.disk_info.modification_time)){
                 print("Disk Image '%.*s' changed since snapshot was taken.\n", full_file_path_size, full_file_path_data);
                 int should_continue = yes_no_stop_point("Continue?", /*force*/0);
                 if(!should_continue) return 0;
@@ -136,7 +136,7 @@ int load_snapshot(struct context *context, char *file_name){
         for(u64 index = 0; index < amount_of_blocks; index++){
             u64 logical_block_address = logical_block_addresses[index];
             
-            vhdx_register_temporary_write(context, blocks_at, logical_block_address, 1);
+            disk_register_temporary_write(context, blocks_at, logical_block_address, 1);
             
             blocks_at += 0x200;
         }
@@ -344,7 +344,7 @@ void write_snapshot(struct context *context, char *file_name){
     //     
     // <blocks>
     
-    struct string full_file_path = globals.vhdx_info.full_file_path;
+    struct string full_file_path = globals.disk_info.full_file_path;
     u8 aligned_path_size = ((full_file_path.size + /*zero-terminator*/1 + 7) & ~7);
     
     u64 temporary_write_blocks_header_size = 3 * sizeof(u64) + aligned_path_size + sizeof(u64) * amount_of_write_blocks;
@@ -456,7 +456,7 @@ void write_snapshot(struct context *context, char *file_name){
     // Write the 'temporary_write_nodes'.
     // 
     fwrite(&amount_of_write_blocks, sizeof(u64), 1, file);
-    fwrite(&globals.vhdx_info.file_modification_time, sizeof(u64), 1, file);
+    fwrite(&globals.disk_info.modification_time, sizeof(u64), 1, file);
     fwrite(&full_file_path.size, sizeof(u64), 1, file);
     fwrite(full_file_path.data, full_file_path.size, 1, file);
     fwrite(zero_buffer, aligned_path_size - full_file_path.size, 1, file);

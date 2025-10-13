@@ -992,25 +992,25 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     crash_assert(0);
                                 }
                                 
-                                if(!globals.vhdx_info.mapped_address){
+                                if(!globals.disk_info.mapped_address){
                                     set_crash_information(context, CRASH_internal_error, (u64)"Disk Access!");
                                     return;
                                 }
                                 
-                                u64 TransferLengthInBytes  = (u64)TransferLengthInBlocks * globals.vhdx_info.sector_size_in_bytes;
+                                u64 TransferLengthInBytes  = (u64)TransferLengthInBlocks * globals.disk_info.sector_size_in_bytes;
                                 
                                 //
                                 // Reading Sectors [LogicalBlockAddress, LogicalBlockAddress + TransferLengthInBlocks)
                                 // into a temporary memory buffer.
                                 //
-                                u8 *temp = vhdx_read_sectors(&context->scratch_arena, TransferLengthInBlocks, LogicalBlockAddress);
+                                u8 *temp = disk_read_sectors(&context->scratch_arena, TransferLengthInBlocks, LogicalBlockAddress);
                                 
                                 if(context != globals.main_thread_context){
                                     // First apply the writes which were applied prior to fuzzing.
-                                    vhdx_apply_temporary_writes(globals.main_thread_context, temp, LogicalBlockAddress, TransferLengthInBlocks);
+                                    disk_apply_temporary_writes(globals.main_thread_context, temp, LogicalBlockAddress, TransferLengthInBlocks);
                                 }
                                 
-                                vhdx_apply_temporary_writes(context, temp, LogicalBlockAddress, TransferLengthInBlocks);
+                                disk_apply_temporary_writes(context, temp, LogicalBlockAddress, TransferLengthInBlocks);
                                 
                                 crash_assert(packet_type == /*VM_PKT_DATA_USING_GPA_DIRECT*/9);
                                 struct{
@@ -1047,7 +1047,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                         
                                         memcpy(PhysicalMemory, temp + TransferAt, ReadLength);
                                         
-                                        if(PRINT_DISK_EVENTS) print("[Disk] Read 0x%x into %p from %p\n", ReadLength, PhysicalAddress, LogicalBlockAddress * globals.vhdx_info.sector_size_in_bytes + TransferAt);
+                                        if(PRINT_DISK_EVENTS) print("[Disk] Read 0x%x into %p from %p\n", ReadLength, PhysicalAddress, LogicalBlockAddress * globals.disk_info.sector_size_in_bytes + TransferAt);
                                         
                                         TransferAt  += ReadLength;
                                         RangeLength -= ReadLength;
@@ -1078,7 +1078,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 
                                 crash_assert(packet_type == /*VM_PKT_DATA_USING_GPA_DIRECT*/9);
                                 
-                                u64 TransferLengthInBytes = TransferLengthInBlocks * globals.vhdx_info.sector_size_in_bytes;
+                                u64 TransferLengthInBytes = TransferLengthInBlocks * globals.disk_info.sector_size_in_bytes;
                                 u8 *Buffer = push_data(&context->scratch_arena, u8, TransferLengthInBytes); // @note: Gets copied in `vhdx_register_tempoary_write`.
                                 
                                 struct{
@@ -1115,7 +1115,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                         
                                         memcpy(Buffer + TransferAt, PhysicalMemory, ReadLength);
                                         
-                                        if(PRINT_DISK_EVENTS) print("[Disk] Wrote 0x%x bytes from %p to %p\n", ReadLength, PhysicalAddress, LogicalBlockAddress * globals.vhdx_info.sector_size_in_bytes + TransferAt);
+                                        if(PRINT_DISK_EVENTS) print("[Disk] Wrote 0x%x bytes from %p to %p\n", ReadLength, PhysicalAddress, LogicalBlockAddress * globals.disk_info.sector_size_in_bytes + TransferAt);
                                         
                                         TransferAt  += ReadLength;
                                         RangeLength -= ReadLength;
@@ -1124,7 +1124,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     RangeOffset += 2 * sizeof(u32) + NumberOfPagesToRead * sizeof(u64);
                                 }
                                 
-                                vhdx_register_temporary_write(context, Buffer, LogicalBlockAddress, TransferLengthInBlocks);
+                                disk_register_temporary_write(context, Buffer, LogicalBlockAddress, TransferLengthInBlocks);
                             }break;
                             
                             case 0x25:{ // READ CAPACITY (10)
@@ -1146,7 +1146,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 
                                 u8 *buffer = get_physical_memory_for_write(context, physical_address);
                                 
-                                u64 lba = (globals.vhdx_info.virtual_disk_size / 0x200) - 1;
+                                u64 lba = (globals.disk_info.virtual_size / 0x200) - 1;
                                 if(lba > 0xffffffff) lba = 0xffffffff;
                                 
                                 *(u32 *)(buffer + 0) = byteswap_u32((u32)lba); // LBA 
@@ -1431,7 +1431,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     case 0x10:{ // READ CAPACITY (16)
                                         crash_assert(allocation_length >= 0x20);
                                         
-                                        u64 lba = (globals.vhdx_info.virtual_disk_size / 0x200) - 1;
+                                        u64 lba = (globals.disk_info.virtual_size / 0x200) - 1;
                                         
                                         *(u64 *)(buffer + 0) = byteswap_u64(lba); // LBA 
                                         *(u32 *)(buffer + 8) = byteswap_u32(0x200);

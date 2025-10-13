@@ -7,26 +7,13 @@
 // and 'vhdx_read_sectors' which reads a run of sectors after the VHDX has been memory mapped.
 // 
 //                                                                            - Pascal Beyer 13.02.2023
-// 
-// Update:
-// 
-// We now also have a very simple 'temporary_write' implementation in this file.
-// The idea is to just keep a list of all writes performed in 'context->temporary_write_nodes'.
-// Whenever a read occurs, we then 'vhdx_apply_temporary_writes'.
-// When fuzzing, we also apply the temporary write nodes of the main thread 
-// (globals.main_thread_context->temporary_write_nodes).
-// This allows us to reset the disk writes to the snapshot by simply clearing
-// 'context->temporary_write_nodes'.
-// 
-//                                                                            - Pascal Beyer 29.02.2024
 
-int parse_vhdx(char *file_name){
+
+static int parse_vhdx(char *file_name, HANDLE *file_handle){
     
     print("Loading .vhdx '%s'\n", file_name);
     
-    HANDLE file_handle = {0};
-    
-    struct file file = memory_map_file(file_name, &file_handle, /*copy_on_write*/0);
+    struct file file = memory_map_file(file_name, file_handle, /*copy_on_write*/0);
     if(!file.memory) return 0;
     
     // 
@@ -186,50 +173,21 @@ int parse_vhdx(char *file_name){
         return 0;
     }
     
-    globals.vhdx_info.virtual_disk_size           = virtual_disk_size;
     globals.vhdx_info.block_allocation_table      = BlockAllocationTable;
     globals.vhdx_info.amount_of_bat_table_entries = TotalBlockAllocationTableEntries;
-    globals.vhdx_info.mapped_address              = MapAddress;
     globals.vhdx_info.sectors_per_block           = SectorsPerBlock;
-    globals.vhdx_info.sector_size_in_bytes        = logical_sector_size;
     globals.vhdx_info.chunk_ratio                 = ChunkRatio;
     
-    
-#if _WIN32
-    
-    // Get the file modification time of the vhdx.
-    if(!GetFileTime(file_handle, null, null, &globals.vhdx_info.file_modification_time)){
-        globals.vhdx_info.file_modification_time = 0;
-    }
-    
-    // Get the full path of the vhdx.
-    u8 PathBuffer[/*MAX_PATH*/260];
-    u32 PathLength = GetFinalPathNameByHandleA(file_handle, PathBuffer, sizeof(PathBuffer), /*VOLUME_NAME_DOS*/0);
-#else
-    // Get the file modification time of the vhdx.
-    struct stat stat_buffer;
-    fstat((int)file_handle.Unused, &stat_buffer);
-    globals.vhdx_info.file_modification_time = stat_buffer.st_mtime;
-    
-    // Get the full path of the vhdx. (A little linux terribleness included)
-    char PathBuffer[PATH_MAX];
-    snprintf(PathBuffer, sizeof(PathBuffer), "/proc/self/fd/%d", (int)file_handle.Unused);
-    ssize_t PathLength = readlink(PathBuffer, PathBuffer, sizeof(PathBuffer));
-#endif
-    
-    if(PathLength <= 0 || PathLength > sizeof(PathBuffer)){
-        print("Warning: Failed to get the full path for disk '%s'.\n", file_name);
-        print("         This means that, when taking a snapshot, the disk-path will not be saved.\n");
-    }else{
-        globals.vhdx_info.full_file_path.data = memcpy(malloc(PathLength + 1), PathBuffer, PathLength + 1);
-        globals.vhdx_info.full_file_path.size = PathLength;
-    }
+    globals.disk_info.virtual_disk_kind = VIRTUAL_DISK_vhdx;
+    globals.disk_info.virtual_size   = virtual_disk_size;
+    globals.disk_info.mapped_address = MapAddress;
+    globals.disk_info.sector_size_in_bytes = logical_sector_size;
     
     return 1;
 }
 
-u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Sector){
-    u64 TotalBytesToRead = TotalSectorsToRead * globals.vhdx_info.sector_size_in_bytes;
+static u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Sector){
+    u64 TotalBytesToRead = TotalSectorsToRead * globals.disk_info.sector_size_in_bytes;
     u8 *ret = push_data(arena, u8, TotalBytesToRead);
     if(!ret) return null;
     
@@ -258,7 +216,7 @@ u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Se
         //
         u64 SectorsLeftToRead = TotalSectorsToRead - SectorsTransfered;
         u64 SectorsToRead =  (SectorsLeftToRead > SizeLeftInBlockInSectors) ? SizeLeftInBlockInSectors : SectorsLeftToRead;
-        u64 BytesToRead   = SectorsToRead * globals.vhdx_info.sector_size_in_bytes;
+        u64 BytesToRead   = SectorsToRead * globals.disk_info.sector_size_in_bytes;
         
         //
         // Get the block offset and state from the 'BlockAllocationTable'.
@@ -269,11 +227,11 @@ u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Se
         u32 EntryState  = (BlockAllocationTableEntry & 7);
         u64 EntryOffset = (BlockAllocationTableEntry & ~0xfffff);
         
-        u64 WriteOffset = SectorsTransfered * globals.vhdx_info.sector_size_in_bytes;
+        u64 WriteOffset = SectorsTransfered * globals.disk_info.sector_size_in_bytes;
         
         if(EntryState == /*PAYLOAD_BLOCK_FULLY_PRESENT*/6){
-            u64 FilePosition = EntryOffset + BlockOffsetInSectors * globals.vhdx_info.sector_size_in_bytes;
-            memcpy(ret + WriteOffset, globals.vhdx_info.mapped_address + FilePosition, BytesToRead);
+            u64 FilePosition = EntryOffset + BlockOffsetInSectors * globals.disk_info.sector_size_in_bytes;
+            memcpy(ret + WriteOffset, globals.disk_info.mapped_address + FilePosition, BytesToRead);
         }else{
             memset(ret + WriteOffset, 0, BytesToRead);
         }
@@ -282,74 +240,5 @@ u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Se
         Sector += SectorsToRead;
     }
     return ret;
-}
-
-
-static void *get_or_allocate_tempoary_write_block(struct context *context, u64 logical_block_address){
-    u32 page_indices[4] = {
-        (logical_block_address >> (39 - 12)) & 0x1ff,
-        (logical_block_address >> (30 - 12)) & 0x1ff,
-        (logical_block_address >> (21 - 12)) & 0x1ff,
-        (logical_block_address >> (12 - 12)) & 0x1ff,
-    };
-    
-    u64 *table = context->temporary_write_table;
-    for(u32 page_table_index = 0; page_table_index < array_count(page_indices)-1; page_table_index++){
-        u32 page_index = page_indices[page_table_index];
-        
-        if(!table[page_index]){
-            table[page_index] = (u64)push_data(&context->fuzz_run_arena, u64, 0x200);
-        }
-        
-        table = (u64 *)table[page_index];
-    }
-    
-    if(!table[page_indices[3]]){
-        table[page_indices[3]] = (u64)push_data(&context->fuzz_run_arena, u8, 0x200);
-    }
-    table = (u64 *)table[page_indices[3]];
-    
-    return table;
-}
-
-
-static void *get_tempoary_write_block(struct context *context, u64 logical_block_address){
-    u32 page_indices[4] = {
-        (logical_block_address >> (39 - 12)) & 0x1ff,
-        (logical_block_address >> (30 - 12)) & 0x1ff,
-        (logical_block_address >> (21 - 12)) & 0x1ff,
-        (logical_block_address >> (12 - 12)) & 0x1ff,
-    };
-    
-    u64 *table = context->temporary_write_table;
-    for(u32 page_table_index = 0; page_table_index < array_count(page_indices); page_table_index++){
-        u32 page_index = page_indices[page_table_index];
-        
-        if(!table[page_index]) return null;
-        
-        table = (u64 *)table[page_index];
-    }
-    
-    return table;
-}
-
-
-static void vhdx_register_temporary_write(struct context *context, u8 *Buffer, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
-    assert(globals.vhdx_info.sector_size_in_bytes == 0x200); // currently we assume this in `get_or_allocate_tempoary_write_block`.
-    
-    for(u64 BlockIndex = 0; BlockIndex < TransferLengthInBlocks; BlockIndex++){
-        u8 *block = get_or_allocate_tempoary_write_block(context, LogicalBlockAddress + BlockIndex);
-        memcpy(block, Buffer + globals.vhdx_info.sector_size_in_bytes * BlockIndex, globals.vhdx_info.sector_size_in_bytes);
-    }
-}
-
-static void vhdx_apply_temporary_writes(struct context *context, u8 *destination, u64 LogicalBlockAddress, u64 TransferLengthInBlocks){
-    
-    for(u64 BlockIndex = 0; BlockIndex < TransferLengthInBlocks; BlockIndex++){
-        u8 *block = get_tempoary_write_block(context, LogicalBlockAddress + BlockIndex);
-        if(block){
-            memcpy(destination + globals.vhdx_info.sector_size_in_bytes * BlockIndex, block, globals.vhdx_info.sector_size_in_bytes);
-        }
-    }
 }
 
