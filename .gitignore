@@ -4,6 +4,7 @@ build
 coverage
 crashes
 symbols
+out
 
 # Ignored binary files
 snafuzz.exe

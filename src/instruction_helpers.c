@@ -1665,6 +1665,47 @@ void helper_cpuid(struct context *context, struct registers *registers){
             exit_debugging_routine(context, crash_information);
         }break;
         
+        
+        case CPUID_copy_out:{
+            if(!context->use_hypervisor) break; // We only do drag and drop in the hypervisor. (Maybe just not fuzzing?)
+            
+            struct cpuid_drag_and_drop_input_buffer input_buffer = guest_read(struct cpuid_drag_and_drop_input_buffer, registers->rdx);
+            
+            // @clenaup: use malloc so we can fail?
+            u8 *file_name_buffer = push_data(&context->scratch_arena, u8, input_buffer.file_name_size + 1);
+            u8 *file_data_buffer = push_data(&context->scratch_arena, u8, input_buffer.file_size);
+            
+            struct crash_information crash_information = enter_debugging_routine(context);
+            
+            guest_read_size(context, file_name_buffer, (u64)input_buffer.file_name, input_buffer.file_name_size, PERMISSION_read);
+            guest_read_size(context, file_data_buffer, (u64)input_buffer.file_data, input_buffer.file_size,      PERMISSION_read);
+            
+            file_name_buffer[input_buffer.file_name_size] = 0;
+            
+            int success = context->crash == CRASH_none;
+            
+            exit_debugging_routine(context, crash_information);
+            
+            struct string file_name = string_strip_file_path((struct string){.data = (char *)file_name_buffer, .size = input_buffer.file_name_size}); // Prevent path traversal (I hope this is enough)
+            
+            print("NOTICE: Copy out %.*s!\n", file_name.size, file_name.data);
+            
+            if(success){
+                char buffer[0x200];
+                snprintf(buffer, sizeof(buffer), "out\\%.*s", file_name.size, file_name.data);
+                FILE *file = fopen(buffer, "wb"); // @cleanup: do this wide?
+                if(file){
+                    fwrite(file_data_buffer, 1, input_buffer.file_size, file);
+                    fclose(file);
+                }else{
+                    print("WARNING: Could not copy out %s, could not fopen!\n", buffer);
+                }
+            }else{
+                print("WARNING: Could not copy out %.*s, crashed while reading!\n", file_name.size, file_name.data);
+            }
+        }break;
+        
+        
         // @note: If a value entered for CPUID.EAX is less then or equal to the maximum input value
         //        and the leaf is not supported on that processor the 0 is returned in all 
         default:{

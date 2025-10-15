@@ -26,3 +26,4 @@ struct cpuid_drag_and_drop_input_buffer{
     u64 file_size;
 };
 #define CPUID_drag_and_drop 0x1337abcd
+#define CPUID_copy_out      0x1337dcba
