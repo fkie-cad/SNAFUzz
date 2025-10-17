@@ -505,10 +505,24 @@ static char *vmbus_device_kind_string[] = {
     [VMBUS_DEVICE_framebuffer] = "framebuffer",
 };
 
-void invalidate_translate_lookaside_buffers(struct context *context){
+static void invalidate_translate_lookaside_buffers(struct context *context){
     memset(&context->read_tlb,    0xff, sizeof(context->read_tlb));
     memset(&context->write_tlb,   0xff, sizeof(context->write_tlb));
     memset(&context->execute_tlb, 0xff, sizeof(context->execute_tlb));
+}
+
+
+// This function is needed because after we have jit'ed code for a physical address,
+// we need to not have it in the tlb anymore. 
+// Otherwise, the code that invalidates the JIT if the page is written again might be skipped.
+static void clear_specific_physical_address_from_write_tlb(struct context *context, u64 page_index){
+    u8 *host_page_address = context->physical_memory + (page_index << 12);
+    
+    for(u32 index = 0; index < array_count(context->write_tlb.entries); index++){
+        if(context->write_tlb.entries[index].host_page_address == host_page_address){
+            memset(&context->write_tlb.entries[index], 0xff, sizeof(context->write_tlb.entries[index]));
+        }
+    }
 }
 
 struct crash_information enter_debugging_routine(struct context *context){

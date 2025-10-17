@@ -54,7 +54,7 @@
 // 
 // There are two factors which make writing the JIT especially hard: 
 //     1) Instructions can span two (virtual!) pages.
-//     2) Code pages can be written to contain different data.
+//     2) Code pages can be re-written in order to contain different data.
 // 
 // To deal with (1), the 'jit_block's contain the starting 'physical_rip'
 // and (if they span more than one page) the 'physical_second_page'.
@@ -64,16 +64,6 @@
 // executed is written, we exit with a 'CRASH_reset_jit' (or 'CRASH_internal_error' 
 // if 'CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING' is set).
 // 
-// @WARNING:
-// 
-// There are currently two bugs in this system:
-//    1) If the code is actually self-modifying, meaning it writes the page it is currently
-//       executing, the 'CRASH_reset_jit' happens too early, and it infinitely loops.
-//    2) Bug (1) happens during the boot of the kernel (because of dynamic linking stuff),
-//       but is masked by the fact, that we don't clear the 'write_tlb', when we finished
-//       jitting a block. 
-// 
-
 
 //
 // Since it gets confusing to talk about registers on the 'host' (the registers we use to emulate)
@@ -309,13 +299,13 @@ void initialize_jit(struct context *context){
     
     if(context->jit_block_table.entries){
         // 
-        // Reinitialize the 'instruction_jit_table'.
+        // Reinitialize the 'jit_block_table'.
         // 
         memset(context->jit_block_table.entries, 0, (context->jit_block_table.maximal_size_minus_one + 1) * sizeof(*context->jit_block_table.entries));
         context->jit_block_table.amount_of_entries = 0;
     }else{   
         //
-        // Initialize the 'instruction_jit_table'.
+        // Initialize the 'jit_block_table'.
         //
         context->jit_block_table.maximal_size_minus_one = 0xfff;
         context->jit_block_table.entries = push_data(&context->permanent_arena, struct jit_block, context->jit_block_table.maximal_size_minus_one + 1);
@@ -6769,6 +6759,7 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
     assert(jit_block->jit_code == null);
     
     _bittestandset((void *)context->physical_memory_executed, (u32)(physical_rip/0x1000)); // set the bit to indicate we have executed this page.
+    clear_specific_physical_address_from_write_tlb(context, physical_rip >> 12);
     
     jit_block->jit_code     = emit_jit_result.jit_code;
     jit_block->physical_rip = physical_rip;
@@ -6782,6 +6773,7 @@ void handle_instruction_cache_miss(struct context *context, struct instruction_c
         // to avoid setting accessed bits unnecessarily.
         u64 physical_second_page = translate_rip_to_physical(context, (instruction_rip + 0x1000) & ~0xfff, PERMISSION_none);
         _bittestandset((void *)context->physical_memory_executed, (u32)(physical_second_page/0x1000)); // set the bit to indicate we have executed this page.
+        clear_specific_physical_address_from_write_tlb(context, physical_second_page >> 12);
     }
     
     
@@ -6902,7 +6894,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
         assert(context->skip_setting_permission_bits == 0);
         
 #if !DISABLE_TAILCALL_OPTIMIZTIONS
-        if(patchable_jit_exit_address){
+        if(!globals.print_trace && patchable_jit_exit_address){
             if(*patchable_jit_exit_address == 0x48){
                 struct patchable_jit_exit *patchable_jit_exit = (void *)patchable_jit_exit_address;
                 

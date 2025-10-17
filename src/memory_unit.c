@@ -488,6 +488,35 @@ int check_breakpoint(enum breakpoint_type type, u64 address, u64 size);
 // Predefine because we want the API to be in `target_specific_code_api.h`.
 int target_read_guest_input_buffer(struct context *context, u64 virtual_address, u8 *buffer, u64 size);
 
+static void maybe_crash_or_reset_jit_on_self_modifying_code(struct context *context, u64 physical_address){
+    // 
+    // @note: we have to range-check here as the framebuffer is not in range of the physical memory.
+    //        Maybe its a good idea anyway, as the page table entries might be corrupted or something.
+    // 
+    if((physical_address < context->physical_memory_size) && _bittest((void *)context->physical_memory_executed, (u32)(physical_address/0x1000))){
+        // 
+        // If we have executed this address already, and now we are writing to it, reset the jit.
+        // 
+        
+        if(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing){
+            // 
+            // @WARNING:
+            //     Currently, these do not repro, as we keep the 'physical_memory_executed' array around and do not reset it each fuzz-case.
+            //     Just like we don't throw away the jit. This means while repro'ing the physical_memory_executed will be different than it is while fuzzing.
+            // 
+            set_crash_information(context, CRASH_internal_error, (u64)"Writting memory which was already executed.");
+        }else{
+            u64 pte;
+            if(physical_address == translate_page_number_to_physical(context, context->registers.rip >> 12, PERMISSION_none, &pte)){
+                set_crash_information(context, CRASH_internal_error, (u64)"Actual Self-Modifying code (changing the page you are currently executing) is currently unsupported.");
+            }else{
+                set_crash_information(context, CRASH_reset_jit, 0);
+            }
+        }
+    }
+}
+
+
 // Returns 1 on success, 0 on crash.
 // Can be used to _read for write_ for instructions like 'add [rax], rcx'.
 int guest_read_size(struct context *context, void *_buffer, u64 address, u64 size, enum permissions required_permissions){
@@ -578,6 +607,10 @@ int guest_read_size(struct context *context, void *_buffer, u64 address, u64 siz
             
             extra_permission_page = get_extra_permissions_for_page(context, starting_page_number);
             host_page_address     = (required_permissions & PERMISSION_write) ? get_physical_memory_for_write(context, physical_address) : get_physical_memory_for_read(context, physical_address);
+            
+            if(required_permissions & PERMISSION_write){
+                maybe_crash_or_reset_jit_on_self_modifying_code(context, physical_address);
+            }
             
             if(!do_not_save_translated_address_in_tlb){
                 tlb_entry->host_page_address     = host_page_address;
@@ -710,31 +743,7 @@ int guest_write_size(struct context *context, void *_buffer, u64 address, u64 si
                 return io_apic_write(context, (address & 0xfff), buffer, size);
             }
             
-            // 
-            // @note: we have to range-check here as the framebuffer is not in range of the physical memory.
-            //        Maybe its a good idea anyway, as the page table entries might be corrupted or something.
-            // 
-            if((physical_address < context->physical_memory_size) && _bittest((void *)context->physical_memory_executed, (u32)(physical_address/0x1000))){
-                // 
-                // If we have executed this address already, and now we are writing to it, reset the jit.
-                // 
-                
-                if(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing){
-                    // 
-                    // @WARNING:
-                    //     Currently, these do not repro, as we keep the 'physical_memory_executed' array around and do not reset it each fuzz-case.
-                    //     Just like we don't throw away the jit. This means while repro'ing the physical_memory_executed will be different than it is while fuzzing.
-                    // 
-                    set_crash_information(context, CRASH_internal_error, (u64)"Writting memory which was already executed.");
-                }else{
-                    
-                    if(physical_address == translate_page_number_to_physical(context, context->registers.rip>>12, PERMISSION_none, &pte)){
-                        set_crash_information(context, CRASH_internal_error, (u64)"Actual Self-Modifying code (changing the page you are currently executing) is currently unsupported.");
-                    }else{
-                        set_crash_information(context, CRASH_reset_jit, 0);
-                    }
-                }
-            }
+            maybe_crash_or_reset_jit_on_self_modifying_code(context, physical_address);
             
             extra_permission_page = get_extra_permissions_for_page(context, starting_page_number);
             host_page_address     = get_physical_memory_for_write(context, physical_address);
