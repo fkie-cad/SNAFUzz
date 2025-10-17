@@ -390,7 +390,7 @@ struct registers{
     u64 hv_x64_msr_stimer0_count;
     u64 hv_x64_msr_stimer0_config;
     
-    u64 hv_x64_msr_vp_assist_page;
+    u64 hv_x64_msr_vp_assist_page; // Used to be msr_apic_assist_page, but then they put more stuff into it!
     u64 hv_x64_msr_hypercall_page;
     u64 hv_x64_msr_reference_tsc_page;
     

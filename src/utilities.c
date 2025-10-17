@@ -2,6 +2,8 @@
 //_____________________________________________________________________________________________________________________
 // Basic Utilities
 
+#define extract_bits(packed, lsb, msb) (((packed) >> (lsb)) & ((1U << ((msb) - (lsb) + 1)) - 1))
+
 // Exiting the program.
 no_return void os_panic(u32 exit_code){
     os_debug_break();

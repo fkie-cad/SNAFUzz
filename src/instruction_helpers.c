@@ -1489,8 +1489,8 @@ void helper_cpuid(struct context *context, struct registers *registers){
             rbx = 
                     /*PostMessages*/(1 << 4) | 
                     /*SignalEvents*/(1 << 5) | 
-                    // /*AccessVSM*/(1 << 15) | 
-                    // /*AccessVpRegisters*/(1 << 16) |
+                    /*AccessVSM*/(1 << 15) | 
+                    /*AccessVpRegisters*/(1 << 16) |
                     /*EnableExtendedHypercalls*/(1 << 19) | 
                     0;
             
@@ -2212,6 +2212,16 @@ void helper_wrmsr(struct context *context, struct registers *registers){
             registers->hv_x64_msr_siefp = value;
         }break;
         
+        case HV_X64_MSR_SINT0:{ // Concerning!
+            print("HV_X64_MSR_SINT0 %p\n", value);
+            registers->hv_x64_msr_sint0 = value;
+        }break;
+        
+        case HV_X64_MSR_SINT1:{ // Concerning!
+            print("HV_X64_MSR_SINT1 %p\n", value);
+            registers->hv_x64_msr_sint1 = value;
+        }break;
+        
         case HV_X64_MSR_SINT2:{
             // print("HV_X64_MSR_SINT2 %p\n", value);
             registers->hv_x64_msr_sint2 = value;
@@ -2546,7 +2556,7 @@ void helper_wrmsr(struct context *context, struct registers *registers){
         
         default:{
             if(globals.debugger_mode){
-                print("***** Unhandled wrmsr 0x%x\n", (u32)registers->rcx);
+                print("***** Unhandled wrmsr 0x%x <- 0x%llx\n", (u32)registers->rcx, value);
                 handle_debugger(context);
             }else{
                 set_crash_information(context, CRASH_internal_error, (u64)"Unimplemented msr.");
@@ -2568,6 +2578,10 @@ void helper_vmcall(struct context *context, struct registers *registers){
     
     u16 CallCode = (u16)registers->rcx;
     int Fast     = (int)((registers->rcx >> 16) & 1);
+    // int variable_header_size = extract_bits(registers->rcx, 17, 26);
+    // int nested =  (registers->rcx >> 31) & 1;
+    int rep_count = extract_bits(registers->rcx, 32, 43);
+    // int rep_start_index = extract_bits(registers->rcx, 38, 59);
     
     //
     // There are two calling conventions, depending on whether _fast_ is set.
@@ -2581,7 +2595,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
     //     rcx - Hypercall Input Value
     //     rdx - Input  Parameter GPA
     //     r8  - Output Parameter GPA
-    // 
     
     struct{
         u64 rdx;
@@ -2604,12 +2617,9 @@ void helper_vmcall(struct context *context, struct registers *registers){
     };
     
     u64 input_gpa = registers->rdx;
-    u64 output_gpa = registers->r8;
+    u64 output_gpa = registers->r8; // @cleanup: bounds check?
     
-    if(!Fast){
-        crash_assert(input_gpa  < context->physical_memory_size);
-        crash_assert(output_gpa < context->physical_memory_size);
-    }
+    registers->rax = (u64)rep_count << 32; // Assume we did everything perfectly. If we fail, we should set it to something else later.
     
     switch(CallCode){
         
@@ -2639,8 +2649,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             //           timing for the timer interrupt.
             
             helper_immediately_pend_timer_interrupt(context, registers);
-            
-            registers->rax = 0;
         }break;
         
         case /*HvCallPostMessage*/0x5c:{
@@ -2697,6 +2705,532 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             *(u64 *)get_physical_memory_for_write(context, output_gpa) = 0;
             registers->rax = 0;
+        }break;
+        
+        // 
+        // Some stuff needed by the Vsm stuff, but not actually related to it.
+        // 
+        
+        case /*HvCallFlushVirtualAddressSpace*/2:
+        case /*HvCallFlushVirtualAddressList*/3:{
+            // Sure buddy :)
+            invalidate_translate_lookaside_buffers(context); // @cleanup?
+        }break;
+        
+        case /*HvModifyVtlProtectionMask*/0xc:{
+            // Umm, sure buddy?
+            if(PRINT_VSM_EVENTS) print("HvModifyVtlProtectionMask (ignored)\n");
+        }break;
+        
+        case /*HvTranslateVirtualAddress*/0x52:{
+            assert(Fast);
+            
+            struct {
+                u64 PartitionId;
+                u32 VpIndex;
+                u64 ControlFlags;
+                u64 GvaPage;
+            } *Parameters = (void *)&fast_buffer;
+            
+            // @cleanup: Do we need more?
+            u64 current_cr3 = context->registers.cr3;
+            context->registers.cr3 = context->vtl_state.cr3;
+            
+            if(PRINT_VSM_EVENTS){
+                print("HvTranslateVirtualAddress %llx %p\n", Parameters->ControlFlags, Parameters->GvaPage);
+            }
+            
+            enum permissions permissions = 0;
+            if(Parameters->ControlFlags & /*HV_TRANSLATE_GVA_VALIDATE_READ*/1)  permissions |= PERMISSION_read;
+            if(Parameters->ControlFlags & /*HV_TRANSLATE_GVA_VALIDATE_WRITE*/2) permissions |= PERMISSION_write;
+            if(Parameters->ControlFlags & /*HV_TRANSLATE_GVA_VALIDATE_EXEC*/4) permissions |= PERMISSION_execute;
+            
+            // HV_TRANSLATE_GVA_PRIVILEGE_EXEMPT    0x08 
+            // HV_TRANSLATE_GVA_SET_PAGE_TABLE_BITS 0x10 
+            // HV_TRANSLATE_GVA_TLB_FLUSH_INHIBIT   0x20
+            
+            int set_page_table_bits = (Parameters->ControlFlags & /*HV_TRANSLATE_GVA_SET_PAGE_TABLE_BITS*/0x10) != 0;
+            
+            context->skip_setting_permission_bits += !set_page_table_bits;
+            
+            u64 page_number = Parameters->GvaPage;
+            u64 pte;
+            
+            u64 physical_address = translate_page_number_to_physical(context, page_number, permissions, &pte);
+            
+            // *(u64 *)&registers->simd[1].xmmi = pte & PAGE_TABLE_present ? /*HvTranslateGvaSuccess*/0 : /*HvTranslateGvaPageNotPresent*/1;
+            // *((u64 *)&registers->simd[1].xmmi + 1) = physical_address>>12;
+            
+            *(u64 *)&registers->simd[1].xmmi = 1; // @cleanup: This is used by SK patch guard to check it actually does what it wants to apperantly.
+            
+            if(PRINT_VSM_EVENTS){
+                print("       -> %d %p\n", pte & PAGE_TABLE_present, physical_address);
+            }
+            
+            context->skip_setting_permission_bits -= !set_page_table_bits;
+            
+            context->registers.cr3 = current_cr3;
+            
+            // handle_debugger(context);
+        }break;
+        
+        
+        // 
+        // Vsm stuff.
+        // Reference: https://learn.microsoft.com/en-us/virtualization/hyper-v-on-windows/tlfs/vsm
+        // 
+        
+        case /*HvCallGetVpRegisters*/0x50:{
+            crash_assert(Fast);
+            
+            struct {
+                u64 PartitionId;
+                u32 VpIndex;
+                u8 TargetVtl;
+                u8 padding[3];
+                u32 register_names[]; // I think this would be an array of rep_count registers?
+            } *Parameters = (void *)&fast_buffer;
+            
+            if(PRINT_VSM_EVENTS){
+                print("HvCallGetVpRegisters %llx %x %x\n", Parameters->PartitionId, Parameters->VpIndex, Parameters->TargetVtl);
+                for(int index = 0; index < rep_count; index++){
+                    print("    %x\n", Parameters->register_names[index]);
+                }
+            }
+            
+            crash_assert(rep_count == 1);
+            
+            // 
+            // The fastpath output stuff is pretty crazy, the output comes immediately after the input, 
+            // but aligned to the next register. In this case that would start at XMM1, But in the future,
+            // if we support looking up more than one register, there would be some weird math involved.
+            // 
+            u64 output = 0, output_high = 0;
+            switch(Parameters->register_names[0]){
+                case /*HvRegisterVsmCapabilities/HV_X64_REGISTER_VSM_CAPABILITIES*/0xD0006:{
+                    // 63 Dr6Shared
+                    // 62:47 MbecVtlMask
+                    // 46 DenyLowerVtlStartup
+                    output = 0;
+                }break;
+                case /*HvRegisterVsmCodePageOffsets*/0xD0002:{
+                    // UINT64 VtlCallOffset : 12;
+                    // UINT64 VtlReturnOffset : 12;
+                    output = 15 | (40 << 12);
+                }break;
+                
+                // 
+                // I assume for now that you are trying to read the other guys registers!
+                // 
+                case 0x00020010: output = context->vtl_state.rip; break;
+                case 0x00020004: output = context->vtl_state.rsp; break;
+                case 0x00020011: output = context->vtl_state.rflags; break;
+                case 0x00040000: output = context->vtl_state.cr0; break;
+                case 0x00040002: output = context->vtl_state.cr3; break;
+                case 0x00040003: output = context->vtl_state.cr4; break;
+                case 0x00050005: output = context->vtl_state.dr7; break;
+                case 0x00050004: output = context->vtl_state.dr6; break;
+                // case 0x00090012: output = context->vtl_state.cr8; break;
+                
+                case 0x00070000: output = (u64)context->vtl_state.idt_limit << 48; output_high = context->vtl_state.idt_base; break;
+                case 0x00070001: output = (u64)context->vtl_state.gdt_limit << 48; output_high = context->vtl_state.gdt_base; break;
+                
+                case 0x00060001: output = *(u64 *)&context->vtl_state.cs; output_high = ((u64 *)&context->vtl_state.cs)[1]; break;
+                case 0x00060003: output = *(u64 *)&context->vtl_state.ds; output_high = ((u64 *)&context->vtl_state.ds)[1]; break;
+                case 0x00060000: output = *(u64 *)&context->vtl_state.es; output_high = ((u64 *)&context->vtl_state.es)[1]; break;
+                case 0x00060004: output = *(u64 *)&context->vtl_state.fs; output_high = ((u64 *)&context->vtl_state.fs)[1]; break;
+                case 0x00060005: output = *(u64 *)&context->vtl_state.gs; output_high = ((u64 *)&context->vtl_state.gs)[1]; break;
+                case 0x00060002: output = *(u64 *)&context->vtl_state.ss; output_high = ((u64 *)&context->vtl_state.ss)[1]; break;
+                case 0x00060007: output = *(u64 *)&context->vtl_state.tr; output_high = ((u64 *)&context->vtl_state.tr)[1]; break;
+                case 0x00060006: output = *(u64 *)&context->vtl_state.ldt; output_high = ((u64 *)&context->vtl_state.ldt)[1]; break;
+                
+                case 0x00080002: output = context->vtl_state.gs_swap; break;
+                
+                case 0x00080001: output = context->vtl_state.ia32_efer; break;
+                case 0x00080004: output = context->vtl_state.ia32_pat; break;
+                
+                case 0x00080000: output = context->vtl_state.ia32_tsc; break;
+                case 0x0008007B: output = context->vtl_state.ia32_tsc_aux; break;
+                
+                case 0x00080009: output = context->vtl_state.ia32_lstar; break;
+                case 0x0008000A: output = context->vtl_state.ia32_cstar; break;
+                case 0x00080008: output = context->vtl_state.ia32_star; break;
+                case 0x0008000B: output = context->vtl_state.ia32_fmask; break;
+                
+                case 0x00090001: output = context->vtl_state.hv_x64_msr_hypercall_page; break;
+                case 0x00090017: output = context->vtl_state.hv_x64_msr_reference_tsc_page; break;
+                case 0x00090013: output = context->vtl_state.hv_x64_msr_vp_assist_page; break;
+                
+                // 
+                // Hmm, are these supposed to be private as well?
+                // 
+                case 0x00080003: output = context->registers.ia32_apic_base; break;
+                
+                case /*HvX64RegisterSysenterCs */0x00080005: output = context->registers.ia32_sep_sel; break;
+                case /*HvX64RegisterSysenterRip*/0x00080006: output = context->registers.ia32_sep_rip; break;
+                case /*HvX64RegisterSysenterRsp*/0x00080007: output = context->registers.ia32_sep_rsp; break;
+                
+                default:{
+                    print("**** Unhandled GetVpRegister 0x%x!\n", Parameters->register_names[0]);
+                    handle_debugger(context);
+                }break;
+            }
+            
+            if(PRINT_VSM_EVENTS) print("        -> 0x%p %p\n", output, output_high);
+            
+            *(u64 *)&registers->simd[1].xmmi = output;
+            *((u64 *)&registers->simd[1].xmmi + 1) = output_high;
+        }break;
+        
+        case /*HvCallSetVpRegisters*/0x51:{
+            crash_assert(Fast);
+            
+            struct {
+                u64 PartitionId;
+                u32 VpIndex;
+                u8 TargetVtl;
+                u8 padding[3];
+                struct{
+                    u32 register_name;
+                    u32 padding[3];
+                    u64 value_low;
+                    u64 value_high;
+                }mapping[]; // I think this would be an array of rep_count registers?
+            } *Parameters = (void *)&fast_buffer;
+            
+            if(PRINT_VSM_EVENTS){
+                print("HvCallSetVpRegisters %llx %x %x\n", Parameters->PartitionId, Parameters->VpIndex, Parameters->TargetVtl);
+                for(int index = 0; index < rep_count; index++){
+                    print("    %x %llx\n", Parameters->mapping[index].register_name, Parameters->mapping[index].value_low);
+                }
+            }
+            
+            crash_assert(rep_count == 1);
+            
+            switch(Parameters->mapping[0].register_name){
+                case /*HV_REGISTER_VSM_PARTITION_CONFIG*/0xd0007:{
+                    struct {
+                        u64 EnableVtlProtection : 1;
+                        u64 DefaultVtlProtectionMask : 4;
+                        u64 ZeroMemoryOnReset : 1;
+                        u64 DenyLowerVtlStartup : 1;
+                        u64 Reserved : 2;
+                        u64 InterceptVpStartup : 1;
+                        u64 Reserved2 : 54;
+                    } *config = (void *)&Parameters->mapping[0].value_low;
+                    
+                    print("HV_REGISTER_VSM_PARTITION_CONFIG:\n");
+                    print("    config->EnableVtlProtection = %llx\n", config->EnableVtlProtection);
+                    print("    config->DefaultVtlProtectionMask = %llx\n", config->DefaultVtlProtectionMask);
+                    print("    config->ZeroMemoryOnReset = %llx\n", config->ZeroMemoryOnReset);
+                    print("    config->DenyLowerVtlStartup = %llx\n", config->DenyLowerVtlStartup);
+                    print("    config->InterceptVpStartup = %llx\n", config->InterceptVpStartup);
+                }break;
+                
+                case /*HvRegisterVsmVpSecureConfigVtl0*/0xd0010:{
+                    
+                    struct {
+                        u64 MbecEnabled : 1;
+                        u64 TlbLocked : 1;
+                        u64 Reserved : 62;
+                    } *config = (void *)&Parameters->mapping[0].value_low;
+                    
+                    print("HvRegisterVsmVpSecureConfigVtl0:\n");
+                    print("    config->MbecEnabled = %llx\n", config->MbecEnabled);
+                    print("    config->TlbLocked = %llx\n", config->TlbLocked);
+                }break;
+                
+                case /*HvRegisterVsmVina*/0xd0005:{
+                    
+                    struct {
+                        u64 Vector : 8;
+                        u64 Enabled : 1;
+                        u64 AutoReset : 1;
+                        u64 AutoEoi : 1;
+                        u64 Reserved : 52;
+                    } *config = (void *)&Parameters->mapping[0].value_low;
+                    
+                    print("HvRegisterVsmVina:\n");
+                    print("    config->Vector = %llx\n", config->Vector);
+                    print("    config->Enabled = %llx\n", config->Enabled);
+                    print("    config->AutoReset = %llx\n", config->AutoReset);
+                    print("    config->AutoEoi = %llx\n", config->AutoEoi);
+                }break;
+                
+                
+                case /*HvX64RegisterCrInterceptControl*/0xE0000:{
+                    print("HvX64RegisterCrInterceptControl:\n");
+                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                }break;
+                case /*HvX64RegisterCrInterceptCr0Mask*/0xE0001:{
+                    print("HvX64RegisterCrInterceptCr0Mask:\n");
+                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                }break;
+                case /*HvX64RegisterCrInterceptCr4Mask*/0xE0002:{
+                    print("HvX64RegisterCrInterceptCr4Mask:\n");
+                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                }break;
+                case /*HvX64RegisterCrInterceptIa32MiscEnableMask*/0xE0003:{
+                    print("HvX64RegisterCrInterceptIa32MiscEnableMask:\n");
+                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                }break;
+                
+                case /*HvRegisterVpAssistPage*/0x90013:{
+                    // @note: Concerning!
+                    context->vtl_state.hv_x64_msr_vp_assist_page = Parameters->mapping[0].value_low; // I assume for now that you are trying to read the other guys registers?
+                }break;
+                
+                
+                
+                // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
+                case 0x00040004: context->vtl_state.cr8 = Parameters->mapping[0].value_low; break;
+                
+                default:{
+                    print("**** Unhandled SetVpRegister 0x%x!\n", Parameters->mapping[0].register_name);
+                    handle_debugger(context);
+                }break;
+            }
+            
+        }break;
+        
+        case /*HvCallEnablePartitionVtl*/0x0d:{
+            crash_assert(Fast);
+            
+            struct {
+                u64 TargetPartitionId;
+                u8 TargetVtl;
+                u8 Flags;
+                u8 Reserved[6];
+            } *Parameters = (void *)&fast_buffer;
+            
+            if(PRINT_VSM_EVENTS) print("HvCallEnablePartitionVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->TargetVtl, Parameters->Flags);
+        }break;
+        
+        case /*HvEnableVpVtl*/0x0f:{
+            crash_assert(!Fast);
+            
+            u8 *input_buffer = get_physical_memory_for_read(context, input_gpa);
+            
+            struct {
+                u64 TargetPartitionId;
+                u32 VpIndex;
+                u8 TargetVtl;
+                u8 Reserved[3];
+                
+                struct{
+                    u64 Rip;
+                    u64 Rsp;
+                    u64 Rflags;
+                    
+                    struct segment cs;
+                    struct segment ds;
+                    struct segment es;
+                    struct segment fs;
+                    struct segment gs;
+                    struct segment ss;
+                    struct segment tr;
+                    struct segment ldtr;
+                    
+                    struct {u16 padding[3]; u16 Limit; u64 Base; } idtr, gdtr;
+                    
+                    u64 Efer;
+                    u64 Cr0;
+                    u64 Cr3;
+                    u64 Cr4;
+                    u64 MsrCrPat;
+                } InitialVpContext;
+            } *Parameters = (void *)input_buffer;
+            
+            if(Parameters->VpIndex != 0){
+                registers->rax = 0xE; // @cleanup: Does this not need some error bit?
+                break;
+            }
+            
+            if(PRINT_VSM_EVENTS){
+                print("HvEnableVpVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->VpIndex, Parameters->TargetVtl);
+                
+                print("Rip %p Rsp %p Rflags %p (", Parameters->InitialVpContext.Rip, Parameters->InitialVpContext.Rsp, Parameters->InitialVpContext.Rflags); print_flags(Parameters->InitialVpContext.Rflags, stdout); print(")\n");
+                print("cs = "); print_segment(Parameters->InitialVpContext.cs);
+                print("ds = "); print_segment(Parameters->InitialVpContext.ds);
+                print("es = "); print_segment(Parameters->InitialVpContext.es);
+                print("fs = "); print_segment(Parameters->InitialVpContext.fs);
+                print("gs = "); print_segment(Parameters->InitialVpContext.gs);
+                print("ss = "); print_segment(Parameters->InitialVpContext.ss);
+                print("tr = "); print_segment(Parameters->InitialVpContext.tr);
+                print("ldtr = "); print_segment(Parameters->InitialVpContext.ldtr);
+                
+                print("idtl = 0x%x idtr = %p\n", Parameters->InitialVpContext.idtr.Limit, Parameters->InitialVpContext.idtr.Base);
+                print("gdtl = 0x%x gdtr = %p\n", Parameters->InitialVpContext.gdtr.Limit, Parameters->InitialVpContext.gdtr.Base);
+                
+                print("Efer %p, Cr0 %p, Cr3 %p, Cr4 %p, MsrCrPat %p\n", Parameters->InitialVpContext.Efer, Parameters->InitialVpContext.Cr0, Parameters->InitialVpContext.Cr3, Parameters->InitialVpContext.Cr4, Parameters->InitialVpContext.MsrCrPat);
+            }
+            
+            context->vtl_state.rip       = Parameters->InitialVpContext.Rip;
+            context->vtl_state.rsp       = Parameters->InitialVpContext.Rsp;
+            context->vtl_state.rflags    = Parameters->InitialVpContext.Rflags;
+            context->vtl_state.cs        = Parameters->InitialVpContext.cs;
+            context->vtl_state.ds        = Parameters->InitialVpContext.ds;
+            context->vtl_state.es        = Parameters->InitialVpContext.es;
+            context->vtl_state.fs        = Parameters->InitialVpContext.fs;
+            context->vtl_state.gs        = Parameters->InitialVpContext.gs;
+            context->vtl_state.ss        = Parameters->InitialVpContext.ss;
+            context->vtl_state.tr        = Parameters->InitialVpContext.tr;
+            context->vtl_state.ldt       = Parameters->InitialVpContext.ldtr;
+            context->vtl_state.idt_base  = Parameters->InitialVpContext.idtr.Base;
+            context->vtl_state.idt_limit = Parameters->InitialVpContext.idtr.Limit;
+            context->vtl_state.gdt_base  = Parameters->InitialVpContext.gdtr.Base;
+            context->vtl_state.gdt_limit = Parameters->InitialVpContext.gdtr.Limit;
+            context->vtl_state.ia32_efer = Parameters->InitialVpContext.Efer;
+            context->vtl_state.cr0       = Parameters->InitialVpContext.Cr0;
+            context->vtl_state.cr3       = Parameters->InitialVpContext.Cr3;
+            context->vtl_state.cr4       = Parameters->InitialVpContext.Cr4;
+            context->vtl_state.ia32_pat  = Parameters->InitialVpContext.MsrCrPat; // Is this correct?
+            
+            // @cleanup: Why do we have both of these?
+            context->vtl_state.fs_base = Parameters->InitialVpContext.fs.base;
+            context->vtl_state.gs_base = Parameters->InitialVpContext.gs.base;
+        }break;
+        
+        case /*HvCallVtlCall*/0x11:
+        case /*HvCallVtlReturn*/0x12:{
+            if(PRINT_VSM_EVENTS) print("HVCallVtl%s\n", CallCode == 0x11 ? "Call" : "Return");
+            
+            // We "control" the vmcall through the hypercall page, so for now this is fine I think.
+            context->registers.rip += 3;
+            
+            context->vtl_state.current_vtl += (CallCode == 0x11) ? 1 : -1;
+            
+            struct vtl_state current_vtl_state = context->vtl_state;
+            
+            // I think we should always take the lower assist page.
+            u64 vp_assist_msr = (CallCode == /*HvCallVtlCall*/0x11) ? registers->hv_x64_msr_vp_assist_page : context->vtl_state.hv_x64_msr_vp_assist_page;
+            
+            u8 *vp_assist_page = get_physical_memory_for_write(context, vp_assist_msr & ~0xfff);
+            crash_assert(vp_assist_page);
+            
+            // 
+            // Save VTL state:
+            // 
+            context->vtl_state.rip = context->registers.rip;
+            context->vtl_state.rsp = context->registers.rsp;
+            context->vtl_state.rflags = context->registers.rflags;
+            context->vtl_state.cr0 = context->registers.cr0;
+            context->vtl_state.cr3 = context->registers.cr3;
+            context->vtl_state.cr4 = context->registers.cr4;
+            context->vtl_state.dr7 = context->registers.dr7;
+            context->vtl_state.dr6 = context->registers.dr6;
+            context->vtl_state.cr8 = context->registers.cr8;
+            
+            context->vtl_state.idt_limit = context->registers.idt_limit;
+            context->vtl_state.gdt_limit = context->registers.gdt_limit;
+            context->vtl_state.idt_base = context->registers.idt_base;
+            context->vtl_state.gdt_base = context->registers.gdt_base;
+            
+            context->vtl_state.cs = context->registers.cs;
+            context->vtl_state.ds = context->registers.ds;
+            context->vtl_state.es = context->registers.es;
+            context->vtl_state.fs = context->registers.fs;
+            context->vtl_state.gs = context->registers.gs;
+            context->vtl_state.ss = context->registers.ss;
+            context->vtl_state.tr = context->registers.tr;
+            context->vtl_state.ldt = context->registers.ldt;
+            
+            context->vtl_state.fs_base = context->registers.fs_base; // MSP C0000100
+            context->vtl_state.gs_base = context->registers.gs_base; // MSR C0000101
+            context->vtl_state.gs_swap = context->registers.gs_swap; // MSR C0000102
+            
+            context->vtl_state.ia32_efer = context->registers.ia32_efer; // 0xc0000080
+            context->vtl_state.ia32_pat = context->registers.ia32_pat;  // 0x00000277
+            
+            context->vtl_state.ia32_tsc = context->registers.ia32_tsc;
+            context->vtl_state.ia32_tsc_aux = context->registers.ia32_tsc_aux; // 0xc0000103
+            
+            context->vtl_state.ia32_lstar = context->registers.ia32_lstar; // 0xc0000082 - Long mode syscall address.
+            context->vtl_state.ia32_cstar = context->registers.ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+            context->vtl_state.ia32_star = context->registers.ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+            context->vtl_state.ia32_fmask = context->registers.ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+            
+            context->vtl_state.hv_x64_msr_hypercall_page = context->registers.hv_x64_msr_hypercall_page;
+            context->vtl_state.hv_x64_msr_reference_tsc_page = context->registers.hv_x64_msr_reference_tsc_page;
+            context->vtl_state.hv_x64_msr_vp_assist_page = context->registers.hv_x64_msr_vp_assist_page;
+            
+            for(u32 index = 0; index < 16; index++){
+                context->vtl_state.hv_x64_msr_sint[index] = context->registers.hv_x64_msr_sint[index];
+            }
+            
+            // 
+            // Apply VTL state:
+            // 
+            context->registers.rip = current_vtl_state.rip;
+            context->registers.rsp = current_vtl_state.rsp;
+            context->registers.rflags = current_vtl_state.rflags;
+            context->registers.cr0 = current_vtl_state.cr0;
+            context->registers.cr3 = current_vtl_state.cr3;
+            context->registers.cr4 = current_vtl_state.cr4;
+            context->registers.dr7 = current_vtl_state.dr7;
+            context->registers.dr6 = current_vtl_state.dr6;
+            context->registers.cr8 = current_vtl_state.cr8;
+            
+            context->registers.idt_limit = current_vtl_state.idt_limit;
+            context->registers.gdt_limit = current_vtl_state.gdt_limit;
+            context->registers.idt_base = current_vtl_state.idt_base;
+            context->registers.gdt_base = current_vtl_state.gdt_base;
+            
+            context->registers.cs = current_vtl_state.cs;
+            context->registers.ds = current_vtl_state.ds;
+            context->registers.es = current_vtl_state.es;
+            context->registers.fs = current_vtl_state.fs;
+            context->registers.gs = current_vtl_state.gs;
+            context->registers.ss = current_vtl_state.ss;
+            context->registers.tr = current_vtl_state.tr;
+            context->registers.ldt = current_vtl_state.ldt;
+            
+            context->registers.fs_base = current_vtl_state.fs_base; // MSP C0000100
+            context->registers.gs_base = current_vtl_state.gs_base; // MSR C0000101
+            context->registers.gs_swap = current_vtl_state.gs_swap; // MSR C0000102
+            
+            context->registers.ia32_efer = current_vtl_state.ia32_efer; // 0xc0000080
+            context->registers.ia32_pat = current_vtl_state.ia32_pat;  // 0x00000277
+            
+            context->registers.ia32_tsc = current_vtl_state.ia32_tsc;
+            context->registers.ia32_tsc_aux = current_vtl_state.ia32_tsc_aux; // 0xc0000103
+            
+            context->registers.ia32_lstar = current_vtl_state.ia32_lstar; // 0xc0000082 - Long mode syscall address.
+            context->registers.ia32_cstar = current_vtl_state.ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+            context->registers.ia32_star = current_vtl_state.ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+            context->registers.ia32_fmask = current_vtl_state.ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+            
+            context->registers.hv_x64_msr_hypercall_page = current_vtl_state.hv_x64_msr_hypercall_page;
+            context->registers.hv_x64_msr_reference_tsc_page = current_vtl_state.hv_x64_msr_reference_tsc_page;
+            context->registers.hv_x64_msr_vp_assist_page = current_vtl_state.hv_x64_msr_vp_assist_page;
+            
+            for(u32 index = 0; index < 16; index++){
+                context->registers.hv_x64_msr_sint[index] = current_vtl_state.hv_x64_msr_sint[index];
+            }
+            
+            struct{
+                u32 EntryReason;
+                u32 VinaAsserted;
+                u64 VtlReturnX64Rax;
+                u64 VtlReturnX64Rcx;
+            } *vtl_control = (void *)(vp_assist_page + 8);
+            
+            
+            if(CallCode == /*HvCallVtlCall*/0x11){
+                vtl_control->EntryReason = /*HvVtlEntryVtlCall*/1;
+            }else{
+                context->registers.rax = vtl_control->VtlReturnX64Rax;
+                context->registers.rcx = vtl_control->VtlReturnX64Rcx;
+            }
+            
+            invalidate_translate_lookaside_buffers(context); // We need to invalidate the tlb because the cr3 changed (we could do this only for jit, but whatever!).
+            
+            // handle_debugger(context);
+            void initialize_jit(struct context *context);
+            initialize_jit(context);
+            if(globals.single_stepping && context->use_hypervisor){
+                hypervisor_set_breakpoint_on_next_instruction(context, registers);
+            }
         }break;
         
         default:{

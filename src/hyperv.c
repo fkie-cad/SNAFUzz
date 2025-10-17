@@ -121,8 +121,7 @@ __declspec(dllimport) s32 WHvRequestInterrupt(HANDLE Partition, struct interrupt
 __declspec(dllimport) s32 WHvGetVirtualProcessorInterruptControllerState2(HANDLE Partition, u32 VirtualProcessorIndex, void *State, u32 StateSize, u32 *BytesWritten);
 __declspec(dllimport) s32 WHvSetVirtualProcessorInterruptControllerState2(HANDLE Partition, u32 VirutalProcessorIndex, void *State, u32 StateSize);
 
-void initialize_hypervisor(struct context *context){
-    (void)context;
+HANDLE initialize_hypervisor(struct context *context){
     
     HANDLE Partition;
     s32 Result;
@@ -285,7 +284,7 @@ void initialize_hypervisor(struct context *context){
         WHvUnmapGpaRange(Partition, context->vmbus.monitor_page2, 0x1000);
     }
     
-    context->Partition = Partition;
+    return Partition;
 }
 
 void hypervisor_pend_interrupt(struct context *context, struct registers *registers, u32 vector_number){
@@ -416,7 +415,8 @@ void start_execution_hypervisor(struct context *context){
     // 
     // Initialize the hypervisor.
     // 
-    initialize_hypervisor(context);
+    context->Partition = initialize_hypervisor(context);
+    
     context->use_hypervisor = 1;
     
     update_exception_exit_bitmap(context);
@@ -1215,13 +1215,20 @@ void start_execution_hypervisor(struct context *context){
                         }break;
                         
                         case HV_X64_MSR_STIMER0_COUNT:{
-                            registers->hv_x64_msr_stimer0_count = msr_input_value;
-                            set_next_timer_interrupt_time(context, registers);
-                            
+                            if(context->vtl_state.current_vtl == 0){
+                                registers->hv_x64_msr_stimer0_count = msr_input_value;
+                                set_next_timer_interrupt_time(context, registers);
+                            }else{
+                                print("WARNING: Ignoring timer at vtl1\n");
+                            }
                         }break;
                         case HV_X64_MSR_STIMER0_CONFIG:{
-                            registers->hv_x64_msr_stimer0_config = msr_input_value;
-                            set_next_timer_interrupt_time(context, registers);
+                            if(context->vtl_state.current_vtl == 0){
+                                registers->hv_x64_msr_stimer0_config = msr_input_value;
+                                set_next_timer_interrupt_time(context, registers);
+                            }else{
+                                print("WARNING: Ignoring timer config at vtl1\n");
+                            }
                         }break;
                         
                         case HV_X64_MSR_EOM:{
@@ -1533,6 +1540,10 @@ void start_execution_hypervisor(struct context *context){
             
             case /*WHvRunVpExitReasonHypercall*/0x00001005:{
                 helper_vmcall(context, registers);
+                if(registers->rip != ExitContext.VpContext.Rip){
+                    // Vtl return or vtl call.
+                    continue;
+                }
             }break;
             
             case /*WHvRunVpExitReasonCanceled*/0x2001:{
@@ -1542,6 +1553,8 @@ void start_execution_hypervisor(struct context *context){
                 
                 // Don't allow any async events, while we are single stepping.
                 if(globals.in_debugger || globals.single_stepping) break;
+                
+                if(context->vtl_state.current_vtl > 0) break;
                 
                 int did_something = hacky_display_input_handling(context);
                 if(did_something) break; // For now, only ever initiate one event in an update.

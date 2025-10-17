@@ -447,6 +447,64 @@ struct context{
     // 
     struct registers registers;
     
+    // Just as a test.
+    struct vtl_state{
+        int current_vtl;
+        
+        u64 rip;
+        u64 rsp;
+        u64 rflags;
+        u64 cr0;
+        u64 cr3;
+        u64 cr4;
+        u64 dr7;
+        u64 dr6;
+        u64 cr8;
+        
+        u16 idt_limit;
+        u16 gdt_limit;
+        u64 idt_base;
+        u64 gdt_base;
+        
+        struct segment cs;
+        struct segment ds;
+        struct segment es;
+        struct segment fs;
+        struct segment gs;
+        struct segment ss;
+        struct segment tr;
+        struct segment ldt;
+        
+        u64 fs_base; // MSP C0000100
+        u64 gs_base; // MSR C0000101
+        u64 gs_swap; // MSR C0000102
+        
+        u64 ia32_efer; // 0xc0000080
+        u64 ia32_pat;  // 0x00000277
+        
+        u64 ia32_tsc;
+        u64 ia32_tsc_aux; // 0xc0000103
+        
+        u64 ia32_lstar; // 0xc0000082 - Long mode syscall address.
+        u64 ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+        u64 ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+        u64 ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+        
+        u64 hv_x64_msr_hypercall_page;
+        u64 hv_x64_msr_reference_tsc_page;
+        u64 hv_x64_msr_vp_assist_page;
+        
+        union{
+            struct{
+                u64 hv_x64_msr_sint0;
+                u64 hv_x64_msr_sint1;
+                u64 hv_x64_msr_sint2;
+                u64 hv_x64_msr_sint3;
+            };
+            u64 hv_x64_msr_sint[16];
+        };
+    } vtl_state;
+    
     struct{
         struct vmbus_channel{
             struct vmbus_channel *next;
@@ -752,15 +810,17 @@ void handle_debugger(struct context *context);
 
 static u64 patch_in_kernel_cr3(struct context *context){
     u64 cr3 = context->registers.cr3;
-    // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
-    //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
-    u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
-    
-    // @note: If we don't have a kpcr I assume, that we are pre-boot and don't want to change the cr3.
-    if(kpcr){
-        u64 kernel_page_table = guest_read(u64, kpcr + 0xb000);
-        if(kernel_page_table){ // This happend to be 0, when VaShadows might have been off? Investigate.
-            context->registers.cr3 = kernel_page_table & 0x7ffffffffffff000;
+    if(context->vtl_state.current_vtl == 0){
+        // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
+        //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
+        u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
+        
+        // @note: If we don't have a kpcr I assume, that we are pre-boot and don't want to change the cr3.
+        if(kpcr){
+            u64 kernel_page_table = guest_read(u64, kpcr + 0xb000);
+            if(kernel_page_table){ // This happend to be 0, when VaShadows might have been off? Investigate.
+                context->registers.cr3 = kernel_page_table & 0x7ffffffffffff000;
+            }
         }
     }
     return cr3;
