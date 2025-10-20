@@ -2537,7 +2537,8 @@ void handle_debugger(struct context *context){
                 else if(string_match(reg, string("ymm15"))){ print_ymm(registers->simd[15].ymmi, 15); }
                 
                 
-                else if(string_match(reg, string("rdtsc")) || string_match(reg, string("tsc"))){ print("0x%llx\n", registers->ia32_tsc); }
+                else if(string_match(reg, string("rdtsc")) || string_match(reg, string("tsc")) || string_match(reg, string("ia32_tsc"))){ print("0x%llx\n", registers->ia32_tsc); }
+                else if(string_match(reg, string("tsc_aux")) || string_match(reg, string("ia32_tsc_aux"))){ print("0x%llx\n", registers->ia32_tsc); }
                 
                 //
                 // Flags.
@@ -2570,9 +2571,37 @@ void handle_debugger(struct context *context){
                     print("   VIF %d\n", registers->VIF);
                     print("   VIP %d\n", registers->VIP);
                     print("   ID  %d\n", registers->ID);
-                }else{
-                    print("Could not parse '%.*s' as a register.\n", reg.size, reg.data);
                 }
+                
+                
+                // 
+                // Msrs
+                // 
+                
+                else if(string_match(reg, string("lstar")) || string_match(reg, string("ia32_lstar"))) { print("%p\n", registers->ia32_lstar); }
+                else if(string_match(reg, string("cstar")) || string_match(reg, string("ia32_cstar"))) { print("%p\n", registers->ia32_cstar); }
+                else if(string_match(reg, string("star")) || string_match(reg, string("ia32_star"))) { print("%p\n", registers->ia32_star); }
+                else if(string_match(reg, string("fmask")) || string_match(reg, string("ia32_fmask"))) { print("%p\n", registers->ia32_fmask); }
+                else if(string_match(reg, string("spec_ctrl")) || string_match(reg, string("ia32_spec_ctrl"))) { print("%p\n", registers->ia32_spec_ctrl); }
+                else if(string_match(reg, string("efer")) || string_match(reg, string("ia32_efer"))) { print("%p\n", registers->ia32_efer); }
+                else if(string_match(reg, string("pat")) || string_match(reg, string("ia32_pat"))) { print("%p\n", registers->ia32_pat); }
+                else if(string_match(reg, string("apic_base")) || string_match(reg, string("ia32_apic_base"))) { print("%p\n", registers->ia32_apic_base); }
+                else if(string_match(reg, string("misc_enable")) || string_match(reg, string("ia32_misc_enable"))) { print("%p\n", registers->ia32_misc_enable); }
+                else if(string_match(reg, string("sep_sel")) || string_match(reg, string("ia32_sep_sel"))) { print("%p\n", registers->ia32_sep_sel); }
+                else if(string_match(reg, string("sep_rsp")) || string_match(reg, string("ia32_sep_rsp"))) { print("%p\n", registers->ia32_sep_rsp); }
+                else if(string_match(reg, string("sep_rip")) || string_match(reg, string("ia32_sep_rip"))) { print("%p\n", registers->ia32_sep_rip); }
+                else if(string_match(reg, string("simp")) || string_match(reg, string("hv_x64_msr_simp"))) { print("%p\n", registers->hv_x64_msr_simp); }
+                else if(string_match(reg, string("siefp")) || string_match(reg, string("hv_x64_msr_siefp"))) { print("%p\n", registers->hv_x64_msr_siefp); }
+                else if(string_match(reg, string("sint0")) || string_match(reg, string("hv_x64_msr_sint0"))) { print("%p\n", registers->hv_x64_msr_sint0); }
+                else if(string_match(reg, string("sint1")) || string_match(reg, string("hv_x64_msr_sint1"))) { print("%p\n", registers->hv_x64_msr_sint1); }
+                else if(string_match(reg, string("sint2")) || string_match(reg, string("hv_x64_msr_sint2"))) { print("%p\n", registers->hv_x64_msr_sint2); }
+                else if(string_match(reg, string("sint3")) || string_match(reg, string("hv_x64_msr_sint3"))) { print("%p\n", registers->hv_x64_msr_sint3); }
+                else if(string_match(reg, string("stimer0")) || string_match(reg, string("hv_x64_msr_stimer0"))) { print("count = %p config = %p", registers->hv_x64_msr_stimer0_count, registers->hv_x64_msr_stimer0_config); }
+                else if(string_match(reg, string("vp_assist")) || string_match(reg, string("vp_assist_page")) || string_match(reg, string("hv_x64_msr_vp_assist_page"))) { print("%p\n", registers->hv_x64_msr_vp_assist_page); }
+                else if(string_match(reg, string("hypercall")) || string_match(reg, string("hypercall_page")) || string_match(reg, string("hv_x64_msr_hypercall_page"))) { print("%p\n", registers->hv_x64_msr_hypercall_page); }
+                else if(string_match(reg, string("reference_tsc")) || string_match(reg, string("reference_tsc_page")) || string_match(reg, string("hv_x64_msr_reference_tsc_page"))) { print("%p\n", registers->hv_x64_msr_reference_tsc_page); }
+                
+                else print("Could not parse '%.*s' as a register.\n", reg.size, reg.data);
             }
             
             continue;
