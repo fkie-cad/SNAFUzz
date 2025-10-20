@@ -4394,8 +4394,8 @@ void handle_debugger(struct context *context){
             print("cr0 = %p\n", context->vtl_state.cr0);
             print("cr3 = %p\n", context->vtl_state.cr3);
             print("cr4 = %p\n", context->vtl_state.cr4);
-            print("dr7 = %p\n", context->vtl_state.dr7);
-            print("dr6 = %p\n", context->vtl_state.dr6);
+            // print("dr7 = %p\n", context->vtl_state.dr7);
+            // print("dr6 = %p\n", context->vtl_state.dr6);
             print("cr8 = %p\n", context->vtl_state.cr8);
             
             print("idt_limit = 0x%x\n", context->vtl_state.idt_limit);

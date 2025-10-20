@@ -1042,6 +1042,8 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
     struct crash_information crash_information = enter_debugging_routine(context);
     
     {
+        if(context->vtl_state.current_vtl) switch_vtl(context); // Search for the kernel at vtl0!
+        
         u64 addresses_to_check[] = {
             // 
             // @cleanup: Maybe find more things addresses here which are inside ntoskrnl here.
@@ -1073,6 +1075,8 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
             
             if(nt) break;
         }
+        
+        if(context->vtl_state.current_vtl) switch_vtl(context);
     }
     
     exit_debugging_routine(context, crash_information);
@@ -1123,6 +1127,9 @@ void load_module_list(struct context *context, struct loaded_module *nt){
 struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context){
     
     struct loaded_module *nt = maybe_find_and_load_ntoskrnl(context);
+    
+    if(context->vtl_state.current_vtl) switch_vtl(context);
+    
     if(nt){
         load_module_list(context, nt);
     }else{
@@ -1139,6 +1146,31 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
         if(nt) load_module_list(context, nt);
         
         context->registers.cr3 = cr3;
+    }
+    
+    if(context->vtl_state.current_vtl) switch_vtl(context);
+    
+    struct loaded_module *secure_kernel = get_loaded_module(string("securekernel"));
+    if(!secure_kernel){
+        if(!context->vtl_state.current_vtl) switch_vtl(context);
+        
+        u64 address = context->registers.ia32_lstar;
+        
+        address &= ~0xfff;
+        
+        for(; !context->crash; address -= 0x1000){
+            if(guest_read(u16, address) == 'ZM'){
+                u32 pe_header_offset = guest_read(u32, address + 0x3c);
+                u32 image_size       = guest_read(u32, address + pe_header_offset + 4 + 20 + 56);
+                
+                struct string name = {0};
+                
+                parse_loaded_module(context, address, image_size, name);
+                break;
+            }
+        }
+        
+        if(!context->vtl_state.current_vtl) switch_vtl(context);
     }
     
     return nt;
@@ -1382,23 +1414,42 @@ void print_stack_trace(struct context *context){
     
     struct registers registers = context->registers;
     
-    while(!context->crash){
+    u64 cr3 = registers.cr3;
+    
+    for(int vtl = context->vtl_state.current_vtl; vtl >= 0; vtl -= 1){ 
         
-        struct loaded_module *module = get_module_for_address(registers.rip);
-        
-        print("%p %p: ", registers.rsp, registers.rip);
-        
-        if(module){
-            print_symbol_from_loaded_module(context, module, registers.rip, stdout);
-            print("\n");
-        }else{
-            print("???\n");
+        while(!context->crash){
+            
+            struct loaded_module *module = get_module_for_address(registers.rip);
+            
+            print("%p %p: ", registers.rsp, registers.rip);
+            
+            if(module){
+                print_symbol_from_loaded_module(context, module, registers.rip, stdout);
+                print("\n");
+            }else{
+                print("???\n");
+            }
+            
+            unwind_one_function(context, module, &registers, /*print_machframe_info*/true);
+            
+            if(!translate_address(context, registers.rip, PERMISSION_execute) || !registers.rip) break; // If the new Rip is not executable we are past the stack.
         }
         
-        unwind_one_function(context, module, &registers, /*print_machframe_info*/true);
-        
-        if(!translate_address(context, registers.rip, PERMISSION_execute) || !registers.rip) break; // If the new Rip is not executable we are past the stack.
+        if(vtl != 0){
+            context->crash = CRASH_none;
+            registers.cr3 = context->vtl_state.cr3;
+            registers.rsp = context->vtl_state.rsp;
+            registers.rip = context->vtl_state.rip;
+            
+            // Needed for memory reads, as they use registers->cr3 implicitly.
+            context->registers.cr3 = registers.cr3;
+            
+            print("-------- VTL%d Transition --------\n", vtl);
+        }
     }
+    
+    context->registers.cr3 = cr3;
     
     exit_debugging_routine(context, crash_information);
 }
