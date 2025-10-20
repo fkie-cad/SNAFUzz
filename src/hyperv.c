@@ -991,7 +991,13 @@ void start_execution_hypervisor(struct context *context){
         }
         
         if(snapshot_mode_should_break_in_debugger){
-            hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
+            
+            u8 *maybe_hlt = translate_address(context, context->registers.rip-1, PERMISSION_none);
+            if(maybe_hlt && *maybe_hlt == /*hlt*/0xf4){
+                handle_debugger(context);
+            }else{
+                hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
+            }
             snapshot_mode_should_break_in_debugger = 0;
         }
         
