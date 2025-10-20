@@ -1,0 +1,9 @@
+bp bootx64!Archpx64TransferTo64BitApplicationAsm + a4
+g
+s
+load_module
+bp winload_prod!OslVsmSetup + 388 - 2
+g
+s
+load_module
+bc *

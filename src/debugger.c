@@ -1987,9 +1987,12 @@ void handle_debugger(struct context *context){
         struct string line;
         
         if(script.active){
-            line = string_eat_line(&script.script);
-            string_skip_whitespace(&script.script);
-            script.active = script.script.size != 0;
+            do{
+                line = string_eat_line(&script.script);
+                string_skip_whitespace(&script.script);
+                script.active = script.script.size != 0;
+            } while(script.active && line.data[0] == /*comment*/'#');
+            
             print("script: %.*s", line.size, line.data);
         }else{
             print("debugger: ");
@@ -3780,26 +3783,28 @@ void handle_debugger(struct context *context){
         
         if(string_match(command, string("script"))){
             
-            if(string_match(line, string("nt"))){
-                script.active = 1;
-                script.script = string(
-                        "bp bootx64!Archpx64TransferTo64BitApplicationAsm + a4\n"
-                        "g\n"
-                        "s\n"
-                        "load_module\n"
-                        "bp winload_prod!OslArchTransferToKernel + 78\n"
-                        "g\n"
-                        "s\n"
-                        "load_module\n"
-                        "bc *\n"
-                        "load_boot_modules rcx\n");
-            }else{
-                print("Unknown script. Currently only nt.\n");
+            char command_copy[0x200];
+            snprintf(command_copy, sizeof(command_copy), "scripts/%.*s", line.size, line.data);
+            
+            struct file script_file = load_file(command_copy); // @note: We leak this thing.
+            if(!script_file.data){
+                print("Error: Script '%s' does not exist.\n", command_copy);
+                continue;
             }
             
+            script.script.data = (char *)script_file.data;
+            script.script.size = script_file.size;
+            
+            string_skip_whitespace(&script.script);
+            
+            if(!script.script.size){
+                print("Error: Script '%s' contains no commands.\n", command_copy);
+                continue;
+            }
+            
+            script.active = 1;
             continue;
         }
-        
         
         if(string_match(command, string("load_boot_modules"))){
             

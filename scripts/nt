@@ -1,0 +1,10 @@
+bp bootx64!Archpx64TransferTo64BitApplicationAsm + a4
+g
+s
+load_module
+bp winload_prod!OslArchTransferToKernel + 78
+g
+s
+load_module
+bc *
+load_boot_modules rcx

@@ -436,7 +436,7 @@ int string_match(struct string lhs, struct string rhs){
 }
 
 int character_is_whitespace(char c){
-    return (c == ' ' || c == '\t' || c == '\n');
+    return (c == ' ' || c == '\t' || c == '\n' || c == '\r');
 }
 
 void string_skip_whitespace(struct string *string){
