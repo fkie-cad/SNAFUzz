@@ -447,64 +447,6 @@ struct context{
     // 
     struct registers registers;
     
-    // @cleanup: Should this be part of registers?
-    struct vtl_state{
-        int current_vtl;
-        
-        u64 rip;
-        u64 rsp;
-        u64 rflags;
-        u64 cr0;
-        u64 cr3;
-        u64 cr4;
-        // u64 dr7;
-        // u64 dr6;
-        u64 cr8;
-        
-        u16 idt_limit;
-        u16 gdt_limit;
-        u64 idt_base;
-        u64 gdt_base;
-        
-        struct segment cs;
-        struct segment ds;
-        struct segment es;
-        struct segment fs;
-        struct segment gs;
-        struct segment ss;
-        struct segment tr;
-        struct segment ldt;
-        
-        u64 fs_base; // MSP C0000100
-        u64 gs_base; // MSR C0000101
-        u64 gs_swap; // MSR C0000102
-        
-        u64 ia32_efer; // 0xc0000080
-        u64 ia32_pat;  // 0x00000277
-        
-        u64 ia32_tsc;
-        u64 ia32_tsc_aux; // 0xc0000103
-        
-        u64 ia32_lstar; // 0xc0000082 - Long mode syscall address.
-        u64 ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
-        u64 ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
-        u64 ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
-        
-        u64 hv_x64_msr_hypercall_page;
-        u64 hv_x64_msr_reference_tsc_page;
-        u64 hv_x64_msr_vp_assist_page;
-        
-        union{
-            struct{
-                u64 hv_x64_msr_sint0;
-                u64 hv_x64_msr_sint1;
-                u64 hv_x64_msr_sint2;
-                u64 hv_x64_msr_sint3;
-            };
-            u64 hv_x64_msr_sint[16];
-        };
-    } vtl_state;
-    
     struct{
         struct vmbus_channel{
             struct vmbus_channel *next;
@@ -600,110 +542,6 @@ void exit_debugging_routine(struct context *context, struct crash_information or
     assert(original_crash_information.debug_depth == context->skip_setting_permission_bits);
 }
 
-static void switch_vtl(struct context *context){
-    
-    struct vtl_state current_vtl_state = context->vtl_state;
-    
-    // 
-    // Save VTL state:
-    // 
-    context->vtl_state.rip = context->registers.rip;
-    context->vtl_state.rsp = context->registers.rsp;
-    context->vtl_state.rflags = context->registers.rflags;
-    context->vtl_state.cr0 = context->registers.cr0;
-    context->vtl_state.cr3 = context->registers.cr3;
-    context->vtl_state.cr4 = context->registers.cr4;
-    // context->vtl_state.dr7 = context->registers.dr7;
-    // context->vtl_state.dr6 = context->registers.dr6;
-    context->vtl_state.cr8 = context->registers.cr8;
-    
-    context->vtl_state.idt_limit = context->registers.idt_limit;
-    context->vtl_state.gdt_limit = context->registers.gdt_limit;
-    context->vtl_state.idt_base = context->registers.idt_base;
-    context->vtl_state.gdt_base = context->registers.gdt_base;
-    
-    context->vtl_state.cs = context->registers.cs;
-    context->vtl_state.ds = context->registers.ds;
-    context->vtl_state.es = context->registers.es;
-    context->vtl_state.fs = context->registers.fs;
-    context->vtl_state.gs = context->registers.gs;
-    context->vtl_state.ss = context->registers.ss;
-    context->vtl_state.tr = context->registers.tr;
-    context->vtl_state.ldt = context->registers.ldt;
-    
-    context->vtl_state.fs_base = context->registers.fs_base; // MSP C0000100
-    context->vtl_state.gs_base = context->registers.gs_base; // MSR C0000101
-    context->vtl_state.gs_swap = context->registers.gs_swap; // MSR C0000102
-    
-    context->vtl_state.ia32_efer = context->registers.ia32_efer; // 0xc0000080
-    context->vtl_state.ia32_pat = context->registers.ia32_pat;  // 0x00000277
-    
-    context->vtl_state.ia32_tsc = context->registers.ia32_tsc;
-    context->vtl_state.ia32_tsc_aux = context->registers.ia32_tsc_aux; // 0xc0000103
-    
-    context->vtl_state.ia32_lstar = context->registers.ia32_lstar; // 0xc0000082 - Long mode syscall address.
-    context->vtl_state.ia32_cstar = context->registers.ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
-    context->vtl_state.ia32_star = context->registers.ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
-    context->vtl_state.ia32_fmask = context->registers.ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
-    
-    context->vtl_state.hv_x64_msr_hypercall_page = context->registers.hv_x64_msr_hypercall_page;
-    context->vtl_state.hv_x64_msr_reference_tsc_page = context->registers.hv_x64_msr_reference_tsc_page;
-    context->vtl_state.hv_x64_msr_vp_assist_page = context->registers.hv_x64_msr_vp_assist_page;
-    
-    for(u32 index = 0; index < 16; index++){
-        context->vtl_state.hv_x64_msr_sint[index] = context->registers.hv_x64_msr_sint[index];
-    }
-    
-    // 
-    // Apply VTL state:
-    // 
-    context->registers.rip = current_vtl_state.rip;
-    context->registers.rsp = current_vtl_state.rsp;
-    context->registers.rflags = current_vtl_state.rflags;
-    context->registers.cr0 = current_vtl_state.cr0;
-    context->registers.cr3 = current_vtl_state.cr3;
-    context->registers.cr4 = current_vtl_state.cr4;
-    // context->registers.dr7 = current_vtl_state.dr7;
-    // context->registers.dr6 = current_vtl_state.dr6;
-    context->registers.cr8 = current_vtl_state.cr8;
-    
-    context->registers.idt_limit = current_vtl_state.idt_limit;
-    context->registers.gdt_limit = current_vtl_state.gdt_limit;
-    context->registers.idt_base = current_vtl_state.idt_base;
-    context->registers.gdt_base = current_vtl_state.gdt_base;
-    
-    context->registers.cs = current_vtl_state.cs;
-    context->registers.ds = current_vtl_state.ds;
-    context->registers.es = current_vtl_state.es;
-    context->registers.fs = current_vtl_state.fs;
-    context->registers.gs = current_vtl_state.gs;
-    context->registers.ss = current_vtl_state.ss;
-    context->registers.tr = current_vtl_state.tr;
-    context->registers.ldt = current_vtl_state.ldt;
-    
-    context->registers.fs_base = current_vtl_state.fs_base; // MSP C0000100
-    context->registers.gs_base = current_vtl_state.gs_base; // MSR C0000101
-    context->registers.gs_swap = current_vtl_state.gs_swap; // MSR C0000102
-    
-    context->registers.ia32_efer = current_vtl_state.ia32_efer; // 0xc0000080
-    context->registers.ia32_pat = current_vtl_state.ia32_pat;  // 0x00000277
-    
-    context->registers.ia32_tsc = current_vtl_state.ia32_tsc;
-    context->registers.ia32_tsc_aux = current_vtl_state.ia32_tsc_aux; // 0xc0000103
-    
-    context->registers.ia32_lstar = current_vtl_state.ia32_lstar; // 0xc0000082 - Long mode syscall address.
-    context->registers.ia32_cstar = current_vtl_state.ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
-    context->registers.ia32_star = current_vtl_state.ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
-    context->registers.ia32_fmask = current_vtl_state.ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
-    
-    context->registers.hv_x64_msr_hypercall_page = current_vtl_state.hv_x64_msr_hypercall_page;
-    context->registers.hv_x64_msr_reference_tsc_page = current_vtl_state.hv_x64_msr_reference_tsc_page;
-    context->registers.hv_x64_msr_vp_assist_page = current_vtl_state.hv_x64_msr_vp_assist_page;
-    
-    for(u32 index = 0; index < 16; index++){
-        context->registers.hv_x64_msr_sint[index] = current_vtl_state.hv_x64_msr_sint[index];
-    }
-}
 
 
 struct globals{
@@ -916,7 +754,7 @@ void handle_debugger(struct context *context);
 
 static u64 patch_in_kernel_cr3(struct context *context){
     u64 cr3 = context->registers.cr3;
-    if(context->vtl_state.current_vtl == 0){
+    if(context->registers.vtl_state.current_vtl == 0){
         // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
         //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
         u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;

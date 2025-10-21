@@ -2734,7 +2734,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             // @cleanup: Do we need more?
             u64 current_cr3 = context->registers.cr3;
-            context->registers.cr3 = context->vtl_state.cr3;
+            context->registers.cr3 = context->registers.vtl_state.cr3;
             
             if(PRINT_VSM_EVENTS){
                 print("HvTranslateVirtualAddress %llx %p\n", Parameters->ControlFlags, Parameters->GvaPage);
@@ -2822,44 +2822,44 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 // 
                 // I assume for now that you are trying to read the other guys registers!
                 // 
-                case 0x00020010: output = context->vtl_state.rip; break;
-                case 0x00020004: output = context->vtl_state.rsp; break;
-                case 0x00020011: output = context->vtl_state.rflags; break;
-                case 0x00040000: output = context->vtl_state.cr0; break;
-                case 0x00040002: output = context->vtl_state.cr3; break;
-                case 0x00040003: output = context->vtl_state.cr4; break;
-                // case 0x00050005: output = context->vtl_state.dr7; break;
-                // case 0x00050004: output = context->vtl_state.dr6; break;
-                // case 0x00090012: output = context->vtl_state.cr8; break;
+                case 0x00020010: output = context->registers.vtl_state.rip; break;
+                case 0x00020004: output = context->registers.vtl_state.rsp; break;
+                case 0x00020011: output = context->registers.vtl_state.rflags; break;
+                case 0x00040000: output = context->registers.vtl_state.cr0; break;
+                case 0x00040002: output = context->registers.vtl_state.cr3; break;
+                case 0x00040003: output = context->registers.vtl_state.cr4; break;
+                // case 0x00050005: output = context->registers.vtl_state.dr7; break;
+                // case 0x00050004: output = context->registers.vtl_state.dr6; break;
+                // case 0x00090012: output = context->registers.vtl_state.cr8; break;
                 
-                case 0x00070000: output = (u64)context->vtl_state.idt_limit << 48; output_high = context->vtl_state.idt_base; break;
-                case 0x00070001: output = (u64)context->vtl_state.gdt_limit << 48; output_high = context->vtl_state.gdt_base; break;
+                case 0x00070000: output = (u64)context->registers.vtl_state.idt_limit << 48; output_high = context->registers.vtl_state.idt_base; break;
+                case 0x00070001: output = (u64)context->registers.vtl_state.gdt_limit << 48; output_high = context->registers.vtl_state.gdt_base; break;
                 
-                case 0x00060001: output = *(u64 *)&context->vtl_state.cs; output_high = ((u64 *)&context->vtl_state.cs)[1]; break;
-                case 0x00060003: output = *(u64 *)&context->vtl_state.ds; output_high = ((u64 *)&context->vtl_state.ds)[1]; break;
-                case 0x00060000: output = *(u64 *)&context->vtl_state.es; output_high = ((u64 *)&context->vtl_state.es)[1]; break;
-                case 0x00060004: output = *(u64 *)&context->vtl_state.fs; output_high = ((u64 *)&context->vtl_state.fs)[1]; break;
-                case 0x00060005: output = *(u64 *)&context->vtl_state.gs; output_high = ((u64 *)&context->vtl_state.gs)[1]; break;
-                case 0x00060002: output = *(u64 *)&context->vtl_state.ss; output_high = ((u64 *)&context->vtl_state.ss)[1]; break;
-                case 0x00060007: output = *(u64 *)&context->vtl_state.tr; output_high = ((u64 *)&context->vtl_state.tr)[1]; break;
-                case 0x00060006: output = *(u64 *)&context->vtl_state.ldt; output_high = ((u64 *)&context->vtl_state.ldt)[1]; break;
+                case 0x00060001: output = *(u64 *)&context->registers.vtl_state.cs; output_high = ((u64 *)&context->registers.vtl_state.cs)[1]; break;
+                case 0x00060003: output = *(u64 *)&context->registers.vtl_state.ds; output_high = ((u64 *)&context->registers.vtl_state.ds)[1]; break;
+                case 0x00060000: output = *(u64 *)&context->registers.vtl_state.es; output_high = ((u64 *)&context->registers.vtl_state.es)[1]; break;
+                case 0x00060004: output = *(u64 *)&context->registers.vtl_state.fs; output_high = ((u64 *)&context->registers.vtl_state.fs)[1]; break;
+                case 0x00060005: output = *(u64 *)&context->registers.vtl_state.gs; output_high = ((u64 *)&context->registers.vtl_state.gs)[1]; break;
+                case 0x00060002: output = *(u64 *)&context->registers.vtl_state.ss; output_high = ((u64 *)&context->registers.vtl_state.ss)[1]; break;
+                case 0x00060007: output = *(u64 *)&context->registers.vtl_state.tr; output_high = ((u64 *)&context->registers.vtl_state.tr)[1]; break;
+                case 0x00060006: output = *(u64 *)&context->registers.vtl_state.ldt; output_high = ((u64 *)&context->registers.vtl_state.ldt)[1]; break;
                 
-                case 0x00080002: output = context->vtl_state.gs_swap; break;
+                case 0x00080002: output = context->registers.vtl_state.gs_swap; break;
                 
-                case 0x00080001: output = context->vtl_state.ia32_efer; break;
-                case 0x00080004: output = context->vtl_state.ia32_pat; break;
+                case 0x00080001: output = context->registers.vtl_state.ia32_efer; break;
+                case 0x00080004: output = context->registers.vtl_state.ia32_pat; break;
                 
-                case 0x00080000: output = context->vtl_state.ia32_tsc; break;
-                case 0x0008007B: output = context->vtl_state.ia32_tsc_aux; break;
+                case 0x00080000: output = context->registers.vtl_state.ia32_tsc; break;
+                case 0x0008007B: output = context->registers.vtl_state.ia32_tsc_aux; break;
                 
-                case 0x00080009: output = context->vtl_state.ia32_lstar; break;
-                case 0x0008000A: output = context->vtl_state.ia32_cstar; break;
-                case 0x00080008: output = context->vtl_state.ia32_star; break;
-                case 0x0008000B: output = context->vtl_state.ia32_fmask; break;
+                case 0x00080009: output = context->registers.vtl_state.ia32_lstar; break;
+                case 0x0008000A: output = context->registers.vtl_state.ia32_cstar; break;
+                case 0x00080008: output = context->registers.vtl_state.ia32_star; break;
+                case 0x0008000B: output = context->registers.vtl_state.ia32_fmask; break;
                 
-                case 0x00090001: output = context->vtl_state.hv_x64_msr_hypercall_page; break;
-                case 0x00090017: output = context->vtl_state.hv_x64_msr_reference_tsc_page; break;
-                case 0x00090013: output = context->vtl_state.hv_x64_msr_vp_assist_page; break;
+                case 0x00090001: output = context->registers.vtl_state.hv_x64_msr_hypercall_page; break;
+                case 0x00090017: output = context->registers.vtl_state.hv_x64_msr_reference_tsc_page; break;
+                case 0x00090013: output = context->registers.vtl_state.hv_x64_msr_vp_assist_page; break;
                 
                 // 
                 // Hmm, are these supposed to be private as well?
@@ -2977,13 +2977,13 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 
                 case /*HvRegisterVpAssistPage*/0x90013:{
                     // @note: Concerning!
-                    context->vtl_state.hv_x64_msr_vp_assist_page = Parameters->mapping[0].value_low; // I assume for now that you are trying to read the other guys registers?
+                    context->registers.vtl_state.hv_x64_msr_vp_assist_page = Parameters->mapping[0].value_low; // I assume for now that you are trying to read the other guys registers?
                 }break;
                 
                 
                 
                 // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
-                case 0x00040004: context->vtl_state.cr8 = Parameters->mapping[0].value_low; break;
+                case 0x00040004: context->registers.vtl_state.cr8 = Parameters->mapping[0].value_low; break;
                 
                 default:{
                     print("**** Unhandled SetVpRegister 0x%x!\n", Parameters->mapping[0].register_name);
@@ -3065,30 +3065,30 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 print("Efer %p, Cr0 %p, Cr3 %p, Cr4 %p, MsrCrPat %p\n", Parameters->InitialVpContext.Efer, Parameters->InitialVpContext.Cr0, Parameters->InitialVpContext.Cr3, Parameters->InitialVpContext.Cr4, Parameters->InitialVpContext.MsrCrPat);
             }
             
-            context->vtl_state.rip       = Parameters->InitialVpContext.Rip;
-            context->vtl_state.rsp       = Parameters->InitialVpContext.Rsp;
-            context->vtl_state.rflags    = Parameters->InitialVpContext.Rflags;
-            context->vtl_state.cs        = Parameters->InitialVpContext.cs;
-            context->vtl_state.ds        = Parameters->InitialVpContext.ds;
-            context->vtl_state.es        = Parameters->InitialVpContext.es;
-            context->vtl_state.fs        = Parameters->InitialVpContext.fs;
-            context->vtl_state.gs        = Parameters->InitialVpContext.gs;
-            context->vtl_state.ss        = Parameters->InitialVpContext.ss;
-            context->vtl_state.tr        = Parameters->InitialVpContext.tr;
-            context->vtl_state.ldt       = Parameters->InitialVpContext.ldtr;
-            context->vtl_state.idt_base  = Parameters->InitialVpContext.idtr.Base;
-            context->vtl_state.idt_limit = Parameters->InitialVpContext.idtr.Limit;
-            context->vtl_state.gdt_base  = Parameters->InitialVpContext.gdtr.Base;
-            context->vtl_state.gdt_limit = Parameters->InitialVpContext.gdtr.Limit;
-            context->vtl_state.ia32_efer = Parameters->InitialVpContext.Efer;
-            context->vtl_state.cr0       = Parameters->InitialVpContext.Cr0;
-            context->vtl_state.cr3       = Parameters->InitialVpContext.Cr3;
-            context->vtl_state.cr4       = Parameters->InitialVpContext.Cr4;
-            context->vtl_state.ia32_pat  = Parameters->InitialVpContext.MsrCrPat; // Is this correct?
+            registers->vtl_state.rip       = Parameters->InitialVpContext.Rip;
+            registers->vtl_state.rsp       = Parameters->InitialVpContext.Rsp;
+            registers->vtl_state.rflags    = Parameters->InitialVpContext.Rflags;
+            registers->vtl_state.cs        = Parameters->InitialVpContext.cs;
+            registers->vtl_state.ds        = Parameters->InitialVpContext.ds;
+            registers->vtl_state.es        = Parameters->InitialVpContext.es;
+            registers->vtl_state.fs        = Parameters->InitialVpContext.fs;
+            registers->vtl_state.gs        = Parameters->InitialVpContext.gs;
+            registers->vtl_state.ss        = Parameters->InitialVpContext.ss;
+            registers->vtl_state.tr        = Parameters->InitialVpContext.tr;
+            registers->vtl_state.ldt       = Parameters->InitialVpContext.ldtr;
+            registers->vtl_state.idt_base  = Parameters->InitialVpContext.idtr.Base;
+            registers->vtl_state.idt_limit = Parameters->InitialVpContext.idtr.Limit;
+            registers->vtl_state.gdt_base  = Parameters->InitialVpContext.gdtr.Base;
+            registers->vtl_state.gdt_limit = Parameters->InitialVpContext.gdtr.Limit;
+            registers->vtl_state.ia32_efer = Parameters->InitialVpContext.Efer;
+            registers->vtl_state.cr0       = Parameters->InitialVpContext.Cr0;
+            registers->vtl_state.cr3       = Parameters->InitialVpContext.Cr3;
+            registers->vtl_state.cr4       = Parameters->InitialVpContext.Cr4;
+            registers->vtl_state.ia32_pat  = Parameters->InitialVpContext.MsrCrPat; // Is this correct?
             
             // @cleanup: Why do we have both of these?
-            context->vtl_state.fs_base = Parameters->InitialVpContext.fs.base;
-            context->vtl_state.gs_base = Parameters->InitialVpContext.gs.base;
+            registers->vtl_state.fs_base = Parameters->InitialVpContext.fs.base;
+            registers->vtl_state.gs_base = Parameters->InitialVpContext.gs.base;
         }break;
         
         case /*HvCallVtlCall*/0x11:
@@ -3098,15 +3098,15 @@ void helper_vmcall(struct context *context, struct registers *registers){
             // We "control" the vmcall through the hypercall page, so for now this is fine I think.
             context->registers.rip += 3;
             
-            context->vtl_state.current_vtl += (CallCode == 0x11) ? 1 : -1;
+            context->registers.vtl_state.current_vtl += (CallCode == 0x11) ? 1 : -1;
             
             // I think we should always take the lower assist page.
-            u64 vp_assist_msr = (CallCode == /*HvCallVtlCall*/0x11) ? registers->hv_x64_msr_vp_assist_page : context->vtl_state.hv_x64_msr_vp_assist_page;
+            u64 vp_assist_msr = (CallCode == /*HvCallVtlCall*/0x11) ? registers->hv_x64_msr_vp_assist_page : context->registers.vtl_state.hv_x64_msr_vp_assist_page;
             
             u8 *vp_assist_page = get_physical_memory_for_write(context, vp_assist_msr & ~0xfff);
             crash_assert(vp_assist_page);
             
-            switch_vtl(context);
+            switch_vtl(&context->registers);
             
             struct{
                 u32 EntryReason;

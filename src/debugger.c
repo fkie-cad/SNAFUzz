@@ -4562,41 +4562,43 @@ void handle_debugger(struct context *context){
         
         if(string_match(command, string("vtl"))){
             
-            print("Current VTL: %u\n\n", context->vtl_state.current_vtl);
+            struct vtl_state *vtl_state = &context->registers.vtl_state;
             
-            print("rip = %p\n", context->vtl_state.rip);
-            print("rsp = %p\n", context->vtl_state.rsp);
-            print("rflags = %p\n", context->vtl_state.rflags);
-            print("cr0 = %p\n", context->vtl_state.cr0);
-            print("cr3 = %p\n", context->vtl_state.cr3);
-            print("cr4 = %p\n", context->vtl_state.cr4);
-            // print("dr7 = %p\n", context->vtl_state.dr7);
-            // print("dr6 = %p\n", context->vtl_state.dr6);
-            print("cr8 = %p\n", context->vtl_state.cr8);
+            print("Current VTL: %u\n\n", vtl_state->current_vtl);
             
-            print("idt_limit = 0x%x\n", context->vtl_state.idt_limit);
-            print("gdt_limit = 0x%x\n", context->vtl_state.gdt_limit);
-            print("idt_base = %p\n", context->vtl_state.idt_base);
-            print("gdt_base = %p\n", context->vtl_state.gdt_base);
+            print("rip = %p\n", vtl_state->rip);
+            print("rsp = %p\n", vtl_state->rsp);
+            print("rflags = %p\n", vtl_state->rflags);
+            print("cr0 = %p\n", vtl_state->cr0);
+            print("cr3 = %p\n", vtl_state->cr3);
+            print("cr4 = %p\n", vtl_state->cr4);
+            // print("dr7 = %p\n", vtl_state->dr7);
+            // print("dr6 = %p\n", vtl_state->dr6);
+            print("cr8 = %p\n", vtl_state->cr8);
             
-            print("fs_base = %p\n", context->vtl_state.fs_base); // MSP C0000100
-            print("gs_base = %p\n", context->vtl_state.gs_base); // MSR C0000101
-            print("gs_swap = %p\n", context->vtl_state.gs_swap); // MSR C0000102
+            print("idt_limit = 0x%x\n", vtl_state->idt_limit);
+            print("gdt_limit = 0x%x\n", vtl_state->gdt_limit);
+            print("idt_base = %p\n", vtl_state->idt_base);
+            print("gdt_base = %p\n", vtl_state->gdt_base);
             
-            print("ia32_efer = %p\n", context->vtl_state.ia32_efer); // 0xc0000080
-            print("ia32_pat = %p\n", context->vtl_state.ia32_pat);  // 0x00000277
+            print("fs_base = %p\n", vtl_state->fs_base); // MSP C0000100
+            print("gs_base = %p\n", vtl_state->gs_base); // MSR C0000101
+            print("gs_swap = %p\n", vtl_state->gs_swap); // MSR C0000102
             
-            print("ia32_tsc = %p\n", context->vtl_state.ia32_tsc);
-            print("ia32_tsc_aux = %p\n", context->vtl_state.ia32_tsc_aux); // 0xc0000103
+            print("ia32_efer = %p\n", vtl_state->ia32_efer); // 0xc0000080
+            print("ia32_pat = %p\n", vtl_state->ia32_pat);  // 0x00000277
             
-            print("ia32_lstar = %p\n", context->vtl_state.ia32_lstar); // 0xc0000082 - Long mode syscall address.
-            print("ia32_cstar = %p\n", context->vtl_state.ia32_cstar); // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
-            print("ia32_star = %p\n", context->vtl_state.ia32_star);  // 0xc0000081 - 32-bit syscall segment + address
-            print("ia32_fmask = %p\n", context->vtl_state.ia32_fmask); // 0xc0000084 - Flag mask for syscalls.
+            print("ia32_tsc = %p\n", vtl_state->ia32_tsc);
+            print("ia32_tsc_aux = %p\n", vtl_state->ia32_tsc_aux); // 0xc0000103
             
-            print("hv_x64_msr_hypercall_page = %p\n", context->vtl_state.hv_x64_msr_hypercall_page);
-            print("hv_x64_msr_reference_tsc_page = %p\n", context->vtl_state.hv_x64_msr_reference_tsc_page);
-            print("hv_x64_msr_vp_assist_page = %p\n", context->vtl_state.hv_x64_msr_vp_assist_page);
+            print("ia32_lstar = %p\n", vtl_state->ia32_lstar); // 0xc0000082 - Long mode syscall address.
+            print("ia32_cstar = %p\n", vtl_state->ia32_cstar); // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+            print("ia32_star = %p\n", vtl_state->ia32_star);  // 0xc0000081 - 32-bit syscall segment + address
+            print("ia32_fmask = %p\n", vtl_state->ia32_fmask); // 0xc0000084 - Flag mask for syscalls.
+            
+            print("hv_x64_msr_hypercall_page = %p\n", vtl_state->hv_x64_msr_hypercall_page);
+            print("hv_x64_msr_reference_tsc_page = %p\n", vtl_state->hv_x64_msr_reference_tsc_page);
+            print("hv_x64_msr_vp_assist_page = %p\n", vtl_state->hv_x64_msr_vp_assist_page);
             
             continue;
         }

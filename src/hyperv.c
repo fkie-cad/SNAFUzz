@@ -1221,7 +1221,7 @@ void start_execution_hypervisor(struct context *context){
                         }break;
                         
                         case HV_X64_MSR_STIMER0_COUNT:{
-                            if(context->vtl_state.current_vtl == 0){
+                            if(context->registers.vtl_state.current_vtl == 0){
                                 registers->hv_x64_msr_stimer0_count = msr_input_value;
                                 set_next_timer_interrupt_time(context, registers);
                             }else{
@@ -1229,7 +1229,7 @@ void start_execution_hypervisor(struct context *context){
                             }
                         }break;
                         case HV_X64_MSR_STIMER0_CONFIG:{
-                            if(context->vtl_state.current_vtl == 0){
+                            if(context->registers.vtl_state.current_vtl == 0){
                                 registers->hv_x64_msr_stimer0_config = msr_input_value;
                                 set_next_timer_interrupt_time(context, registers);
                             }else{
@@ -1560,7 +1560,7 @@ void start_execution_hypervisor(struct context *context){
                 // Don't allow any async events, while we are single stepping.
                 if(globals.in_debugger || globals.single_stepping) break;
                 
-                if(context->vtl_state.current_vtl > 0) break;
+                if(context->registers.vtl_state.current_vtl > 0) break;
                 
                 int did_something = hacky_display_input_handling(context);
                 if(did_something) break; // For now, only ever initiate one event in an update.

@@ -1042,7 +1042,7 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
     struct crash_information crash_information = enter_debugging_routine(context);
     
     {
-        if(context->vtl_state.current_vtl) switch_vtl(context); // Search for the kernel at vtl0!
+        if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers); // Search for the kernel at vtl0!
         
         u64 addresses_to_check[] = {
             // 
@@ -1076,7 +1076,7 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
             if(nt) break;
         }
         
-        if(context->vtl_state.current_vtl) switch_vtl(context);
+        if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
     }
     
     exit_debugging_routine(context, crash_information);
@@ -1128,7 +1128,7 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
     
     struct loaded_module *nt = maybe_find_and_load_ntoskrnl(context);
     
-    if(context->vtl_state.current_vtl) switch_vtl(context);
+    if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
     
     if(nt){
         load_module_list(context, nt);
@@ -1148,11 +1148,11 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
         context->registers.cr3 = cr3;
     }
     
-    if(context->vtl_state.current_vtl) switch_vtl(context);
+    if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
     
     struct loaded_module *secure_kernel = get_loaded_module(string("securekernel"));
     if(!secure_kernel){
-        if(!context->vtl_state.current_vtl) switch_vtl(context);
+        if(!context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
         
         u64 address = context->registers.ia32_lstar;
         
@@ -1170,7 +1170,7 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
             }
         }
         
-        if(!context->vtl_state.current_vtl) switch_vtl(context);
+        if(!context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
     }
     
     return nt;
@@ -1416,7 +1416,7 @@ void print_stack_trace(struct context *context){
     
     u64 cr3 = registers.cr3;
     
-    for(int vtl = context->vtl_state.current_vtl; vtl >= 0; vtl -= 1){ 
+    for(int vtl = context->registers.vtl_state.current_vtl; vtl >= 0; vtl -= 1){ 
         
         while(!context->crash){
             
@@ -1438,9 +1438,9 @@ void print_stack_trace(struct context *context){
         
         if(vtl != 0){
             context->crash = CRASH_none;
-            registers.cr3 = context->vtl_state.cr3;
-            registers.rsp = context->vtl_state.rsp;
-            registers.rip = context->vtl_state.rip;
+            registers.cr3 = context->registers.vtl_state.cr3;
+            registers.rsp = context->registers.vtl_state.rsp;
+            registers.rip = context->registers.vtl_state.rip;
             
             // Needed for memory reads, as they use registers->cr3 implicitly.
             context->registers.cr3 = registers.cr3;

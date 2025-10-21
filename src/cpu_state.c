@@ -596,6 +596,63 @@ struct registers{
             /* 0x32 */u8 centuary;
         } RTC;
     } CMOS;
+    
+    struct vtl_state{
+        int current_vtl;
+        
+        u64 rip;
+        u64 rsp;
+        u64 rflags;
+        u64 cr0;
+        u64 cr3;
+        u64 cr4;
+        // u64 dr7;
+        // u64 dr6;
+        u64 cr8;
+        
+        u16 idt_limit;
+        u16 gdt_limit;
+        u64 idt_base;
+        u64 gdt_base;
+        
+        struct segment cs;
+        struct segment ds;
+        struct segment es;
+        struct segment fs;
+        struct segment gs;
+        struct segment ss;
+        struct segment tr;
+        struct segment ldt;
+        
+        u64 fs_base; // MSP C0000100
+        u64 gs_base; // MSR C0000101
+        u64 gs_swap; // MSR C0000102
+        
+        u64 ia32_efer; // 0xc0000080
+        u64 ia32_pat;  // 0x00000277
+        
+        u64 ia32_tsc;
+        u64 ia32_tsc_aux; // 0xc0000103
+        
+        u64 ia32_lstar; // 0xc0000082 - Long mode syscall address.
+        u64 ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+        u64 ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+        u64 ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+        
+        u64 hv_x64_msr_hypercall_page;
+        u64 hv_x64_msr_reference_tsc_page;
+        u64 hv_x64_msr_vp_assist_page;
+        
+        union{
+            struct{
+                u64 hv_x64_msr_sint0;
+                u64 hv_x64_msr_sint1;
+                u64 hv_x64_msr_sint2;
+                u64 hv_x64_msr_sint3;
+            };
+            u64 hv_x64_msr_sint[16];
+        };
+    } vtl_state;
 };
 
 enum rflags{
@@ -1494,3 +1551,108 @@ struct crash_information{
     int debug_depth; // Used to ensure calls of 'enter_debugging_routine' match calls of 'exit_debugging_routine'.
 };
 
+
+static void switch_vtl(struct registers *registers){
+    
+    struct vtl_state current_vtl_state = registers->vtl_state;
+    
+    // 
+    // Save VTL state:
+    // 
+    registers->vtl_state.rip = registers->rip;
+    registers->vtl_state.rsp = registers->rsp;
+    registers->vtl_state.rflags = registers->rflags;
+    registers->vtl_state.cr0 = registers->cr0;
+    registers->vtl_state.cr3 = registers->cr3;
+    registers->vtl_state.cr4 = registers->cr4;
+    // registers->vtl_state.dr7 = registers->dr7;
+    // registers->vtl_state.dr6 = registers->dr6;
+    registers->vtl_state.cr8 = registers->cr8;
+    
+    registers->vtl_state.idt_limit = registers->idt_limit;
+    registers->vtl_state.gdt_limit = registers->gdt_limit;
+    registers->vtl_state.idt_base = registers->idt_base;
+    registers->vtl_state.gdt_base = registers->gdt_base;
+    
+    registers->vtl_state.cs = registers->cs;
+    registers->vtl_state.ds = registers->ds;
+    registers->vtl_state.es = registers->es;
+    registers->vtl_state.fs = registers->fs;
+    registers->vtl_state.gs = registers->gs;
+    registers->vtl_state.ss = registers->ss;
+    registers->vtl_state.tr = registers->tr;
+    registers->vtl_state.ldt = registers->ldt;
+    
+    registers->vtl_state.fs_base = registers->fs_base; // MSP C0000100
+    registers->vtl_state.gs_base = registers->gs_base; // MSR C0000101
+    registers->vtl_state.gs_swap = registers->gs_swap; // MSR C0000102
+    
+    registers->vtl_state.ia32_efer = registers->ia32_efer; // 0xc0000080
+    registers->vtl_state.ia32_pat = registers->ia32_pat;  // 0x00000277
+    
+    registers->vtl_state.ia32_tsc = registers->ia32_tsc;
+    registers->vtl_state.ia32_tsc_aux = registers->ia32_tsc_aux; // 0xc0000103
+    
+    registers->vtl_state.ia32_lstar = registers->ia32_lstar; // 0xc0000082 - Long mode syscall address.
+    registers->vtl_state.ia32_cstar = registers->ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+    registers->vtl_state.ia32_star = registers->ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+    registers->vtl_state.ia32_fmask = registers->ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+    
+    registers->vtl_state.hv_x64_msr_hypercall_page = registers->hv_x64_msr_hypercall_page;
+    registers->vtl_state.hv_x64_msr_reference_tsc_page = registers->hv_x64_msr_reference_tsc_page;
+    registers->vtl_state.hv_x64_msr_vp_assist_page = registers->hv_x64_msr_vp_assist_page;
+    
+    for(u32 index = 0; index < 16; index++){
+        registers->vtl_state.hv_x64_msr_sint[index] = registers->hv_x64_msr_sint[index];
+    }
+    
+    // 
+    // Apply VTL state:
+    // 
+    registers->rip = current_vtl_state.rip;
+    registers->rsp = current_vtl_state.rsp;
+    registers->rflags = current_vtl_state.rflags;
+    registers->cr0 = current_vtl_state.cr0;
+    registers->cr3 = current_vtl_state.cr3;
+    registers->cr4 = current_vtl_state.cr4;
+    // registers->dr7 = current_vtl_state.dr7;
+    // registers->dr6 = current_vtl_state.dr6;
+    registers->cr8 = current_vtl_state.cr8;
+    
+    registers->idt_limit = current_vtl_state.idt_limit;
+    registers->gdt_limit = current_vtl_state.gdt_limit;
+    registers->idt_base = current_vtl_state.idt_base;
+    registers->gdt_base = current_vtl_state.gdt_base;
+    
+    registers->cs = current_vtl_state.cs;
+    registers->ds = current_vtl_state.ds;
+    registers->es = current_vtl_state.es;
+    registers->fs = current_vtl_state.fs;
+    registers->gs = current_vtl_state.gs;
+    registers->ss = current_vtl_state.ss;
+    registers->tr = current_vtl_state.tr;
+    registers->ldt = current_vtl_state.ldt;
+    
+    registers->fs_base = current_vtl_state.fs_base; // MSP C0000100
+    registers->gs_base = current_vtl_state.gs_base; // MSR C0000101
+    registers->gs_swap = current_vtl_state.gs_swap; // MSR C0000102
+    
+    registers->ia32_efer = current_vtl_state.ia32_efer; // 0xc0000080
+    registers->ia32_pat = current_vtl_state.ia32_pat;  // 0x00000277
+    
+    registers->ia32_tsc = current_vtl_state.ia32_tsc;
+    registers->ia32_tsc_aux = current_vtl_state.ia32_tsc_aux; // 0xc0000103
+    
+    registers->ia32_lstar = current_vtl_state.ia32_lstar; // 0xc0000082 - Long mode syscall address.
+    registers->ia32_cstar = current_vtl_state.ia32_cstar; // 0xc0000083 - Compatibility mode syscall address. (@note: We currently don't support compatibility mode).
+    registers->ia32_star = current_vtl_state.ia32_star;  // 0xc0000081 - 32-bit syscall segment + address
+    registers->ia32_fmask = current_vtl_state.ia32_fmask; // 0xc0000084 - Flag mask for syscalls.
+    
+    registers->hv_x64_msr_hypercall_page = current_vtl_state.hv_x64_msr_hypercall_page;
+    registers->hv_x64_msr_reference_tsc_page = current_vtl_state.hv_x64_msr_reference_tsc_page;
+    registers->hv_x64_msr_vp_assist_page = current_vtl_state.hv_x64_msr_vp_assist_page;
+    
+    for(u32 index = 0; index < 16; index++){
+        registers->hv_x64_msr_sint[index] = current_vtl_state.hv_x64_msr_sint[index];
+    }
+}
