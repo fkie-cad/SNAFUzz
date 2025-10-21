@@ -6622,18 +6622,6 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
             //           Technically, the sti instruction might cause us to have to `check_for_interrupts` after a conditional branch.
             // 
             
-            if(should_check_for_interrupts){
-                
-                // Call check for interrupts and exit the jit if one was delivered.
-                //     mov arg1, context
-                //     mov arg2, registers
-                //     call check_for_interrupts
-                
-                emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_context));
-                emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_registers));
-                emit_call_to_helper(context, check_for_interrupts, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_do_not_print);
-            }
-            
             if(context->jit_skip_one_breakpoint && instruction_rip == initial_rip){
                 // Reset the 'jit_skip_one_breakpoint' only after the first instruction of the first block has been executed.
                 // Future blocks will not go into this code path, as we will first execute this and hence the value will be reset.
@@ -6664,6 +6652,18 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 //
                 //    add nonvol_rip, imm8
                 emit(0x48 | REXB, 0x83, make_modrm(MOD_REG, REG_OPCODE_add, NONVOL_rip), (u8)instruction_size);
+            }
+            
+            if(should_check_for_interrupts){
+                
+                // Call check for interrupts and exit the jit if one was delivered.
+                //     mov arg1, context
+                //     mov arg2, registers
+                //     call check_for_interrupts
+                
+                emit_inst(0x8b, reg(8, ARG_REG_1, NONVOL_context));
+                emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_registers));
+                emit_call_to_helper(context, check_for_interrupts, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_do_not_print);
             }
         }
         
