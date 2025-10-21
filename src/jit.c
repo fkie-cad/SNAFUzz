@@ -4637,6 +4637,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                         
                     }break;
                     
+                    case 0xD9:  // VMMCALL (amd-v)
                     case 0xC1:{ // VMCALL
                         emit(0x48, 0x8B, make_modrm(MOD_REG, ARG_REG_1, NONVOL_context));
                         emit(0x48, 0x8B, make_modrm(MOD_REG, ARG_REG_2, NONVOL_registers));
