@@ -249,6 +249,13 @@ int local_apic_read(struct context *context, u64 offset, void *buffer, smm size)
             name = "id";
         }break;
         
+        case 0x30:{
+            // Version register
+            value = 0x50014; // 5 lvt entries minus one and version 0x14?
+            memcpy(buffer, &value, size);
+            name = "version";
+        }break;
+        
         case 0x80:{
             // Task Priority Register
             value = (u32)(context->registers.cr8 & 0xf) << 4;
