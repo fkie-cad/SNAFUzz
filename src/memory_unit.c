@@ -727,8 +727,16 @@ int guest_write_size(struct context *context, void *_buffer, u64 address, u64 si
             // Our "TLB" missed! Translate the page and store it in the TLB.
             // 
             
+            enum permission permission = PERMISSION_write;
+            
+            if((context->registers.cr0 & /*Write Protect*/(1 << 16)) == 0){
+                do_not_save_translated_address_in_tlb = 1;
+                permission = PERMISSION_read;
+            }
+            
+            
             u64 pte = 0;
-            u64 physical_address = translate_page_number_to_physical(context, starting_page_number, PERMISSION_write, &pte);
+            u64 physical_address = translate_page_number_to_physical(context, starting_page_number, permission, &pte);
             
             if(!(pte & PAGE_TABLE_present)){
                 set_crash_information(context, CRASH_write, address);
