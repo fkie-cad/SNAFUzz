@@ -4091,8 +4091,10 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                         // 
                         //    test rcx, rcx
                         //    jz fail
-                        //    
-                        emit(0x48, 0x85, make_modrm(MOD_REG, REGISTER_C, REGISTER_C));
+                        //   
+                        if(operand_size == 2) emit(0x66);
+                        if(operand_size == 8) emit(0x48);
+                        emit(0x85, make_modrm(MOD_REG, REGISTER_C, REGISTER_C));
                         emit(0x74); u8 *patch_fail_zero = emit_get_current(context); emit(0);
                         
                         if(operand_size == 1 && reg.encoding == /*div*/6){
@@ -4210,7 +4212,7 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                         emit(0x48, 0x3B, make_modrm(MOD_REG, REGISTER_D, REGISTER_C));
                         emit(0x73); u8 *patch_fail_overflow = emit_get_current(context); emit(0);
                         
-                        // op rdx, rax, rcx
+                        // div rdx, rax, rcx
                         if(operand_size == 2) emit(0x66);
                         if(operand_size == 8) emit(0x48);
                         emit(opcode, make_modrm(MOD_REG, /*div*/6, REGISTER_C)); // @note: Always perform a div, not an idiv.
