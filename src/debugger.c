@@ -165,6 +165,7 @@ u64 get_address_of_next_instruction(struct context *context, struct registers *r
     u64 next_rip = registers->rip;
     
     try_again_because_move_to_ss_is_weird:;
+    try_again_because_microsoft_sometimes_does_not_clear_RF_after_emulating_on_amd:;
     
     struct instruction_information decoded_instruction = decode_instruction(instruction_buffer);
     
@@ -359,6 +360,15 @@ u64 get_address_of_next_instruction(struct context *context, struct registers *r
         // sysret
         case 0x107: next_rip = registers->rcx; break;
         
+        case 0x130:
+        case 0x132:{
+            if(globals.cpu_vendor == VENDOR_AMD){
+                // As far as I can tell, this causes the problem where we cannot single step wrmsr instructions, but not sure.
+                prefetch_instruction(context, next_rip, instruction_buffer, sizeof(instruction_buffer));
+                goto try_again_because_microsoft_sometimes_does_not_clear_RF_after_emulating_on_amd;
+            }
+        }break;
+        
         //
         // @note: We also handle all things here, which have to check for interrupts.
         //        This is because otherwise we cannot know that we hit an interrupt
@@ -376,6 +386,12 @@ u64 get_address_of_next_instruction(struct context *context, struct registers *r
                 int vector = apic_get_pending_interrupt(&temp);
                 if(vector != -1){
                     next_rip = get_address_for_vector(context, registers, vector);
+                }
+            }else if(decoded_instruction.reg == 4){
+                if(globals.cpu_vendor == VENDOR_AMD){
+                    // As far as I can tell, this causes the problem where we cannot single step wrmsr instructions, but not sure.
+                    prefetch_instruction(context, next_rip, instruction_buffer, sizeof(instruction_buffer));
+                    goto try_again_because_microsoft_sometimes_does_not_clear_RF_after_emulating_on_amd;
                 }
             }
         }break;
