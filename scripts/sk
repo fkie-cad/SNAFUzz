@@ -1,4 +1,4 @@
-bp bootx64!Archpx64TransferTo64BitApplicationAsm + a4
+bp @search(@search(bootx64!Archpx64TransferTo64BitApplicationAsm, ff d0) + 2, ff d0)
 g
 s
 load_module

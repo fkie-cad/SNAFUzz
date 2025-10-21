@@ -1,8 +1,8 @@
-bp bootx64!Archpx64TransferTo64BitApplicationAsm + a4
+bp @search(@search(bootx64!Archpx64TransferTo64BitApplicationAsm, ff d0) + 2, ff d0)
 g
 s
 load_module
-bp winload_prod!OslArchTransferToKernel + 78
+bp @search(winload_prod!OslArchTransferToKernel, 48 cb)
 g
 s
 load_module

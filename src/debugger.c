@@ -491,6 +491,9 @@ int hypervisor_set_breakpoint_on_next_instruction(struct context *context, struc
 //_____________________________________________________________________________________________________________________
 // Parsing addresses
 
+// @note: Used recursively for directives.
+u64 parse_address(struct context *context, struct string *line, int *error);
+
 u64 parse_one_address(struct context *context, struct string symbol, int *error){
     
     struct registers *registers = &context->registers;
@@ -551,6 +554,89 @@ u64 parse_one_address(struct context *context, struct string symbol, int *error)
     return parse_number(symbol, error);
 }
 
+u64 parse_directive(struct context *context, struct string directive, struct string *arguments, u64 amount_of_arguments, int *error){
+    
+    if(string_match(directive, string("@search"))){
+        
+        if(amount_of_arguments != 2){
+            *error = 1;
+            print("Expected two arguments.\n");
+            return 0;
+        }
+        
+        struct string base_address_string = arguments[0];
+        u64 base_address = parse_address(context, &base_address_string, error);
+        
+        u8 *base = push_data(&context->scratch_arena, u8, 0);
+        
+        struct string bytes = arguments[1];
+        
+        while(1){
+            string_skip_whitespace(&bytes);
+            
+            if(bytes.size < 2){
+                if(bytes.size == 1){
+                    print("Uneven amount of nibbles in search '%.*s'.\n", arguments[1].size, arguments[1].data);
+                    *error = 1;
+                    return 0; 
+                }
+                break;
+            }
+            
+            struct string byte = bytes;
+            byte.size = 2;
+            bytes.size -= 2;
+            bytes.data += 2;
+            
+            *push_struct(&context->scratch_arena, u8) = (u8)parse_number(byte, error);
+            
+            if(*error){
+                print("Failed to parse byte '%.*s'.\n", byte.size, byte.data);
+                return 0;
+            }
+        }
+        
+        u64 amount_of_bytes = push_data(&context->scratch_arena, u8, 0) - base;
+        
+        if(*error) return 0;
+        
+        // snapshot_mode_currently_in_debugger = 0;
+        for(u64 address = base_address; !context->crash; address++){
+            
+            // if(snapshot_mode_should_break_in_debugger) break; // make the search cancelable.
+            
+            int found = 1;
+            for(u64 index = 0; index < amount_of_bytes; index++){
+                u8 byte = guest_read(u8, address + index);
+                if(byte != base[index]){
+                    found = 0;
+                    break;
+                }
+            }
+            
+            if(found){
+                return address;
+            }
+        }
+        // snapshot_mode_currently_in_debugger = 1;
+        
+        print("Unable to find sequence '");
+        for(u64 index = 0; index < amount_of_bytes; index++){
+            print("%.2x", base[index]);
+            if(index + 1 < amount_of_bytes) print(" ");
+        }
+        print("' starting from address %p\n", base_address);
+        *error = 1;
+        
+        return 0;
+    }
+    
+    print("Unknown directive '%.*s'\n", directive.size, directive.data);
+    *error = 1;
+    
+    return 0;
+}
+
 u64 parse_address_multiply(struct context *context, struct string *line, int *error){
     
     //
@@ -567,33 +653,106 @@ u64 parse_address_multiply(struct context *context, struct string *line, int *er
         //
         string_skip_whitespace(line);
         
-        //
-        // Get the symbol.
-        //
-        struct string symbol = *line;
+        // 
+        // Check if this is a directive call.
+        // 
+        u64 symbol_address;
         
-        while(line->size){
-            if(character_is_whitespace(line->data[0]) || line->data[0] == '*' || line->data[0] == '/' || line->data[0] == '+' || line->data[0] == '-') break;
+        if(line->size && line->data[0] == '@'){
+            struct string directive = *line;
+            
+            while(line->size){
+                if(line->data[0] == '(') break;
+                
+                line->size -= 1;
+                line->data += 1;
+            }
+            
+            directive.size = line->data - directive.data;
+            
+            if(!line->size || line->data[0] != '('){
+                print("Expected '(' after directive '%.*s'\n", directive.size, directive.data);
+                *error = 1;
+                return 0;
+            }
             
             line->size -= 1;
             line->data += 1;
-        }
-        
-        symbol.size = line->data - symbol.data;
-        
-        //
-        // Eat whitespace after the symbol.
-        //
-        string_skip_whitespace(line);
-        
-        //
-        // Parse the symbol and merge it into the address.
-        //
-        u64 symbol_address = parse_one_address(context, symbol, error);
-        
-        if(*error){
-            print("[parse_address] Could not find '%.*s'.\n", symbol.size, symbol.data);
-            return 0;
+            
+            struct string *arguments = push_data(&context->scratch_arena, struct string, 0);
+            
+            u64 depth = 1;
+            
+            char *start = line->data;
+            
+            while(line->size){
+                if(line->data[0] == '('){
+                    depth += 1;
+                }
+                
+                if(line->data[0] == ')'){
+                    depth -= 1;
+                    if(depth == 0) break;
+                }
+                
+                if(depth == 1 && line->data[0] == ','){
+                    *push_struct(&context->scratch_arena, struct string) = (struct string){.data = start, .size = line->data - start};
+                    start = line->data + 1;
+                }
+                
+                line->size -= 1;
+                line->data += 1;
+            }
+            
+            if(line->size < 1 || line->data[0] != ')'){
+                *error = 1;
+                print("Unballanced '(' for directive '%.*s'.\n", directive.size, directive.data);
+                return 0;
+            }
+            
+            *push_struct(&context->scratch_arena, struct string) = (struct string){.data = start, .size = line->data - start};
+            
+            u64 amount_of_arguments = push_data(&context->scratch_arena, struct string, 0) - arguments;
+            
+            line->size -= 1;
+            line->data += 1;
+            
+            symbol_address = parse_directive(context, directive, arguments, amount_of_arguments, error);
+            
+            //
+            // Eat whitespace after the directive.
+            //
+            string_skip_whitespace(line);
+        }else{
+            
+            //
+            // Get the symbol.
+            //
+            struct string symbol = *line;
+            
+            while(line->size){
+                if(character_is_whitespace(line->data[0]) || line->data[0] == '*' || line->data[0] == '/' || line->data[0] == '+' || line->data[0] == '-') break;
+                
+                line->size -= 1;
+                line->data += 1;
+            }
+            
+            symbol.size = line->data - symbol.data;
+            
+            //
+            // Eat whitespace after the symbol.
+            //
+            string_skip_whitespace(line);
+            
+            //
+            // Parse the symbol and merge it into the address.
+            //
+            symbol_address = parse_one_address(context, symbol, error);
+            
+            if(*error){
+                print("[parse_address] Could not find '%.*s'.\n", symbol.size, symbol.data);
+                return 0;
+            }
         }
         
         if(operator == '*'){
@@ -3261,6 +3420,7 @@ void handle_debugger(struct context *context){
             globals.KiKernelSysretExit_process_name[module_name.size] = 0;
             continue;
         }
+        
         if(string_match(command, string("bl"))){
             //
             // List all breakpoints.
