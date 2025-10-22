@@ -29,7 +29,7 @@ void target_reset__default_weak(struct context *context){
     target_reset__default(context);
 }
 int target_read_guest_input_buffer__default_weak(struct context *context, u64 virtual_address, u8 *buffer, u64 size){
-    return target_read_guest_input_buffer__default_weak(context, virtual_address, buffer, size);
+    return target_read_guest_input_buffer__default(context, virtual_address, buffer, size);
 }
 
 struct input target_get_input(struct context *context, u64 *seed) __attribute__((weak, alias("target_get_input__default_weak")));
