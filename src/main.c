@@ -1525,12 +1525,12 @@ int main(int argc, char *argv[]){
             continue;
         }
         
-        if(strcmp(arg, "-jit") == 0){
+        if(strcmp(arg, "-jit") == 0 || strcmp(arg, "--jit") == 0){
             use_jit = 1;
             continue;
         }
         
-        if(strcmp(arg, "-thread_count") == 0){
+        if(strcmp(arg, "-thread_count") == 0 || strcmp(arg, "--thread_count") == 0){
             char *argument = argv[++argument_index];
             if(!argument){
                 print("Expected an argument after '%s'.\n", arg);
