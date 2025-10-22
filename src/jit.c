@@ -1538,8 +1538,10 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
         //        This is useful for 
         //            1) single stepping in the debugger
         //            2) comparing the jit to the hypervisor
+        //            3) self-modifying code
         // 
         is_terminating_instruction = globals.single_stepping;
+        is_terminating_instruction |= context->force_one_instruction;
         
         if(globals.debugger_mode && globals.breakpoint_count != 0){
             for(u32 breakpoint_index = 0; breakpoint_index < array_count(globals.breakpoints); breakpoint_index++){
@@ -6668,6 +6670,13 @@ struct emit_jit_result emit_jit(struct context *context, u64 instruction_rip){
                 emit_inst(0x8b, reg(8, ARG_REG_2, NONVOL_registers));
                 emit_call_to_helper(context, check_for_interrupts, HELPER_cares_about_rip | HELPER_might_change_rip | HELPER_do_not_print);
             }
+            
+            if(context->force_one_instruction){
+                // mov [context + .crash], CRASH_reset_jit
+                // jmp [context->jit_exit]
+                emit_inst(0xC7, regm32(8, /*mov*/0, NONVOL_context)); emit32(offset_in_type(struct context, crash)); emit32(CRASH_reset_jit);
+                emit_inst(0xff, regm32(4, /*jmp*/4, NONVOL_context)); emit32(offset_in_type(struct context, jit_exit));
+            }
         }
         
         instruction_rip += instruction_size;
@@ -6962,7 +6971,7 @@ struct crash_information jit_execute_until_exception(struct context *context){
             }
         }
         
-        if(context->crash == CRASH_reset_jit){
+        if(context->crash == CRASH_reset_jit || context->crash == CRASH_self_modifying_code){
             
             if(CRASH_ON_SELF_MODIFYING_CODE_DURING_FUZZING && globals.fuzzing){
                 set_crash_information(context, CRASH_internal_error, (u64)"Would be resetting the jit.");
@@ -6970,8 +6979,9 @@ struct crash_information jit_execute_until_exception(struct context *context){
             }
             
             initialize_jit(context);
-            context->crash = CRASH_none;
             patchable_jit_exit_address = 0;
+            context->force_one_instruction = (context->crash == CRASH_self_modifying_code);
+            context->crash = CRASH_none;
         }
         
 #if 0

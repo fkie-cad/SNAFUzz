@@ -508,7 +508,9 @@ static void maybe_crash_or_reset_jit_on_self_modifying_code(struct context *cont
         }else{
             u64 pte;
             if(physical_address == translate_page_number_to_physical(context, context->registers.rip >> 12, PERMISSION_none, &pte)){
-                set_crash_information(context, CRASH_internal_error, (u64)"Actual Self-Modifying code (changing the page you are currently executing) is currently unsupported.");
+                if(!context->force_one_instruction){
+                    set_crash_information(context, CRASH_self_modifying_code, 0);
+                }
             }else{
                 set_crash_information(context, CRASH_reset_jit, 0);
             }
@@ -610,6 +612,7 @@ int guest_read_size(struct context *context, void *_buffer, u64 address, u64 siz
             
             if(required_permissions & PERMISSION_write){
                 maybe_crash_or_reset_jit_on_self_modifying_code(context, physical_address);
+                if(context->crash) return 0; // It crashed, fail the read.
             }
             
             if(!do_not_save_translated_address_in_tlb){
@@ -752,6 +755,7 @@ int guest_write_size(struct context *context, void *_buffer, u64 address, u64 si
             }
             
             maybe_crash_or_reset_jit_on_self_modifying_code(context, physical_address);
+            if(context->crash) return 0; // It crashed, fail the write.
             
             extra_permission_page = get_extra_permissions_for_page(context, starting_page_number);
             host_page_address     = get_physical_memory_for_write(context, physical_address);

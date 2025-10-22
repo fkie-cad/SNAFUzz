@@ -287,6 +287,10 @@ struct context{
     // 
     int skip_setting_permission_bits;
     
+    // This field is used for self-modifying code to not infinitely crash on the same instruction.
+    // It is a weird hack, where we reset the jit twice.
+    int force_one_instruction;
+    
     // Fields to manage physical memory for the thread.
     //    'physical_memory'           - Each thread reserves space to copy the entire physical memory space of the guest.
     //    'physical_memory_size'      - Same as 'globals.physical_memory_size'.

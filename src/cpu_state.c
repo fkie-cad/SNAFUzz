@@ -1506,6 +1506,7 @@ enum crash_type{
     
     CRASH_enter_debugger, // Used to implement breakpoints in the jit.
     CRASH_reset_jit,      // Used to reset the jit in case a page is written which was previously executed.
+    CRASH_self_modifying_code,
     
     CRASH_type_count,
 };
