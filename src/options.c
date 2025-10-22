@@ -91,6 +91,31 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 
 #define HYPERVISOR_EXIT_ON_RDTSC  0
 
+
+// 
+// VSM only works partially:
+// 
+// The system can boot with Virtualization Based Security (VBS) enabled.
+// VTL calls are implemented and work fine, but I don't see a good way to implement `HvModifyVtlProtectionMask`,
+// which is sort of the main point of VBS. Fundamentally, we would need to be able have two physical memory mappings,
+// one for each VTL, as the permissions are different between the two VTL.
+// 
+// I don't see a way to do this with the Hypervisor Platform APIs. There is probably a way if we go to the undocumented Vid.dll.
+// 
+// This means while VBS is running, there is no real separation between VTL 0 and VTL 1.
+// This is not be much of a problem, except when trying run with HVCI enabled.
+// If HVCI is enabled, the Secure Kernel Patch Guard (or Skpg, or Hyperguard) is also enabled.
+// During its initialization, it tests that kernel pages are actually protected, by writing to a page and then executing it.
+// The function that is being written and then executed is `KiErrata671Present`.
+// If the write was successful, it return 0, otherwise it returns 1.
+// 
+// For us this will incorrectly return 0, and shortly thereafter Skpg will cause a CRITICAL_INITIALIZATION_FAILURE bugcheck.
+// 
+//                                                                                    - Pascal Beyer 22.10.2025
+// This define disables the corresponding cpuid bits.
+#define ENABLE_VSM 0
+
+
 //_____________________________________________________________________________________________________________________
 // Debugging options
 

@@ -1489,8 +1489,11 @@ void helper_cpuid(struct context *context, struct registers *registers){
             rbx = 
                     /*PostMessages*/(1 << 4) | 
                     /*SignalEvents*/(1 << 5) | 
+                    
+#if ENABLE_VSM
                     /*AccessVSM*/(1 << 15) | 
                     /*AccessVpRegisters*/(1 << 16) |
+#endif
                     /*EnableExtendedHypercalls*/(1 << 19) | 
                     0;
             
@@ -2736,9 +2739,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             u64 current_cr3 = context->registers.cr3;
             context->registers.cr3 = context->registers.vtl_state.cr3;
             
-            if(PRINT_VSM_EVENTS){
-                print("HvTranslateVirtualAddress %llx %p\n", Parameters->ControlFlags, Parameters->GvaPage);
-            }
+            if(PRINT_VSM_EVENTS) print("HvTranslateVirtualAddress %llx %p\n", Parameters->ControlFlags, Parameters->GvaPage);
             
             enum permissions permissions = 0;
             if(Parameters->ControlFlags & /*HV_TRANSLATE_GVA_VALIDATE_READ*/1)  permissions |= PERMISSION_read;
@@ -2763,9 +2764,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             *(u64 *)&registers->simd[1].xmmi = 1; // @cleanup: This is used by SK patch guard to check it actually does what it wants to apperantly.
             
-            if(PRINT_VSM_EVENTS){
-                print("       -> %d %p\n", pte & PAGE_TABLE_present, physical_address);
-            }
+            if(PRINT_VSM_EVENTS) print("       -> %d %p\n", pte & PAGE_TABLE_present, physical_address);
             
             context->skip_setting_permission_bits -= !set_page_table_bits;
             
@@ -2919,12 +2918,14 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved2 : 54;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    print("HV_REGISTER_VSM_PARTITION_CONFIG:\n");
-                    print("    config->EnableVtlProtection = %llx\n", config->EnableVtlProtection);
-                    print("    config->DefaultVtlProtectionMask = %llx\n", config->DefaultVtlProtectionMask);
-                    print("    config->ZeroMemoryOnReset = %llx\n", config->ZeroMemoryOnReset);
-                    print("    config->DenyLowerVtlStartup = %llx\n", config->DenyLowerVtlStartup);
-                    print("    config->InterceptVpStartup = %llx\n", config->InterceptVpStartup);
+                    if(PRINT_VSM_EVENTS){
+                        print("HV_REGISTER_VSM_PARTITION_CONFIG:\n");
+                        print("    config->EnableVtlProtection = %llx\n", config->EnableVtlProtection);
+                        print("    config->DefaultVtlProtectionMask = %llx\n", config->DefaultVtlProtectionMask);
+                        print("    config->ZeroMemoryOnReset = %llx\n", config->ZeroMemoryOnReset);
+                        print("    config->DenyLowerVtlStartup = %llx\n", config->DenyLowerVtlStartup);
+                        print("    config->InterceptVpStartup = %llx\n", config->InterceptVpStartup);
+                    }
                 }break;
                 
                 case /*HvRegisterVsmVpSecureConfigVtl0*/0xd0010:{
@@ -2935,9 +2936,11 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved : 62;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    print("HvRegisterVsmVpSecureConfigVtl0:\n");
-                    print("    config->MbecEnabled = %llx\n", config->MbecEnabled);
-                    print("    config->TlbLocked = %llx\n", config->TlbLocked);
+                    if(PRINT_VSM_EVENTS){
+                        print("HvRegisterVsmVpSecureConfigVtl0:\n");
+                        print("    config->MbecEnabled = %llx\n", config->MbecEnabled);
+                        print("    config->TlbLocked = %llx\n", config->TlbLocked);
+                    }
                 }break;
                 
                 case /*HvRegisterVsmVina*/0xd0005:{
@@ -2950,36 +2953,44 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved : 52;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    print("HvRegisterVsmVina:\n");
-                    print("    config->Vector = %llx\n", config->Vector);
-                    print("    config->Enabled = %llx\n", config->Enabled);
-                    print("    config->AutoReset = %llx\n", config->AutoReset);
-                    print("    config->AutoEoi = %llx\n", config->AutoEoi);
+                    if(PRINT_VSM_EVENTS){
+                        print("HvRegisterVsmVina:\n");
+                        print("    config->Vector = %llx\n", config->Vector);
+                        print("    config->Enabled = %llx\n", config->Enabled);
+                        print("    config->AutoReset = %llx\n", config->AutoReset);
+                        print("    config->AutoEoi = %llx\n", config->AutoEoi);
+                    }
                 }break;
-                
                 
                 case /*HvX64RegisterCrInterceptControl*/0xE0000:{
-                    print("HvX64RegisterCrInterceptControl:\n");
-                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    if(PRINT_VSM_EVENTS){
+                        print("HvX64RegisterCrInterceptControl:\n");
+                        print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    }
                 }break;
                 case /*HvX64RegisterCrInterceptCr0Mask*/0xE0001:{
-                    print("HvX64RegisterCrInterceptCr0Mask:\n");
-                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    if(PRINT_VSM_EVENTS){
+                        print("HvX64RegisterCrInterceptCr0Mask:\n");
+                        print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    }
                 }break;
                 case /*HvX64RegisterCrInterceptCr4Mask*/0xE0002:{
-                    print("HvX64RegisterCrInterceptCr4Mask:\n");
-                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    if(PRINT_VSM_EVENTS){
+                        print("HvX64RegisterCrInterceptCr4Mask:\n");
+                        print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    }
                 }break;
                 case /*HvX64RegisterCrInterceptIa32MiscEnableMask*/0xE0003:{
-                    print("HvX64RegisterCrInterceptIa32MiscEnableMask:\n");
-                    print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    if(PRINT_VSM_EVENTS){
+                        print("HvX64RegisterCrInterceptIa32MiscEnableMask:\n");
+                        print("    %p\n", Parameters->mapping[0].value_low); // ?
+                    }
                 }break;
                 
                 case /*HvRegisterVpAssistPage*/0x90013:{
                     // @note: Concerning!
                     context->registers.vtl_state.hv_x64_msr_vp_assist_page = Parameters->mapping[0].value_low; // I assume for now that you are trying to read the other guys registers?
                 }break;
-                
                 
                 
                 // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
