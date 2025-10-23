@@ -2571,6 +2571,9 @@ void helper_wrmsr(struct context *context, struct registers *registers){
 //_____________________________________________________________________________________________________________________
 // vmcall
 
+// @cleanup: factoring.
+__declspec(dllimport) s32 WHvMapGpaRange(HANDLE Partition, void *SourceAddress, u64 PhysicalGuestAddress, u64 SizeInBytes, u32 Flags);
+
 void helper_vmcall(struct context *context, struct registers *registers){
     
     if(PRINT_HOOK_EVENTS) print("[" __FUNCTION__ "] %p\n", registers->rip);
@@ -2721,8 +2724,76 @@ void helper_vmcall(struct context *context, struct registers *registers){
         }break;
         
         case /*HvModifyVtlProtectionMask*/0xc:{
-            // Umm, sure buddy?
-            if(PRINT_VSM_EVENTS) print("HvModifyVtlProtectionMask (ignored)\n");
+            
+            // 
+            // From what I can tell, there is no good way for me to accurately implement 
+            // this hypercall. The reason is, that I don't think I can have multiple 
+            // VMCS (Virtual Machine Control Structures) for one partition.
+            // At least not using the Windows Hypervisor Platform API's.
+            // 
+            // The corresponding function:
+            // 
+            //    s32 WHvMapGpaRange(HANDLE Partition, void *SourceAddress, u64 PhysicalGuestAddress, u64 SizeInBytes, u32 Flags);
+            //    
+            // Does not allow me to specify a "VTL".
+            // Having multiple Partitions one for each VTL also did not seem to work.
+            // Mapping the same range with another Partition was complaining.
+            // 
+            // BUT, I have a hack idea:
+            // 
+            // The secure kernel only (mostly?) tries to protect itself (not readable nor writeable from normal mode) 
+            // and certain sections (not readable or not executable).
+            // 
+            // Hence, we can simply keep all of the sections from the secure kernel but apply all the other permissions.
+            // This should mean that while the secure kernel is not protected, if no one tries to take advantage of that
+            // the system looks like it should.
+            // 
+            
+            struct {
+                u64 PartitionId;
+                u32 MapFlags;
+                u8  TargetVtl;
+                u8  Reserved[3];
+                u64 GpaPageList[];
+            } *Parameters = Fast ? (void *)&fast_buffer : get_physical_memory_for_read(context, input_gpa);
+            
+            if(PRINT_VSM_EVENTS){
+                
+                char *read = (Parameters->MapFlags & 1) ? " Read" : "";
+                char *write = (Parameters->MapFlags & 2) ? " Write" : "";
+                char *execute = (Parameters->MapFlags & 4) ? " Exec" : "";
+                char *user_execute = (Parameters->MapFlags & 8) ? " UserExec" : "";
+                char *none = (Parameters->MapFlags  == 0) ? " None" : "";
+                
+                print("HvModifyVtlProtectionMask(%s): %llx %x %x%s%s%s%s%s\n", Fast ? "Fast" : "Slow", Parameters->PartitionId, Parameters->TargetVtl, Parameters->MapFlags, read, write, execute, user_execute, none);
+                for(int index = 0; index < rep_count; index++){
+                    print("    %p\n", Parameters->GpaPageList[index]);
+                }
+            }
+            
+            if(Parameters->MapFlags == 0){
+                // See comment above, we have to somehow "merge" the permissions for VTL0 and VTL1.
+                // MapFlags == 0 probably means this is a secure kernel GPA.
+                break;
+            }
+            
+            for(int index = 0; index < rep_count; index++){
+                u64 Gpa = Parameters->GpaPageList[index] << 12;  // @cleanup: maybe merge ranges?
+                u8 *SourceAddress = context->physical_memory + Gpa;
+                
+                // Well it seems, I cannot do mode based execution controls (separate executable bit for kernel and userspace) with `WHvMapGpaRange`.
+                // So I guess a page is executable if it is executable either in user space or in kernel space.
+                // As I think all pages are executable in user space, this means they are all executable... sigh.
+                
+                u32 flags = Parameters->MapFlags & 0x7;
+                if(Parameters->MapFlags & 0x8) flags |= 4;
+                
+                s32 WHvMapGpaRangeResult = WHvMapGpaRange(context->Partition, SourceAddress, Gpa, 0x1000, flags);
+                if(WHvMapGpaRangeResult != 0){
+                    print("WHvMapGpaRangeResult = %x (%p %p 0x1000, %x)\n", WHvMapGpaRangeResult, SourceAddress, Gpa, flags);
+                }
+            }
+            
         }break;
         
         case /*HvTranslateVirtualAddress*/0x52:{
@@ -2769,8 +2840,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             context->skip_setting_permission_bits -= !set_page_table_bits;
             
             context->registers.cr3 = current_cr3;
-            
-            // handle_debugger(context);
         }break;
         
         

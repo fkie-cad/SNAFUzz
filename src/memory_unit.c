@@ -139,7 +139,7 @@ u8 *get_physical_memory_for_read(struct context *context, u64 physical_address){
     // Copy the page from the snapshot, then we know where it is.
     //
     u8 *dest_page   = context->physical_memory         + page_index * 0x1000;
-    u8 *source_page = globals.snapshot.physical_memory + page_index * 0x1000;        
+    u8 *source_page = globals.snapshot.physical_memory + page_index * 0x1000;
     
     int success = os_commit_memory(dest_page, 0x1000, /*executable*/false);
     assert(success);
@@ -173,7 +173,7 @@ u8 *get_physical_memory_for_write(struct context *context, u64 physical_address)
             if(context->amount_of_dirty_physical_pages > DIRTY_PHYSICAL_PAGE_CAPACITY - 0x100){
                 // @note: Abuse of the CRASH_timeout value, maybe I should rename it into CRASH_reset,
                 //        or make another value, or alias?
-                //        We want the same behaviour as a timeout, don't save the inpu etc.
+                //        We want the same behaviour as a timeout, don't save the input etc.
                 set_crash_information(context, CRASH_timeout, (u64)"Dirty Page overflow.");
             }
         }

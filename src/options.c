@@ -113,6 +113,18 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 // 
 //                                                                                    - Pascal Beyer 22.10.2025
 // This define disables the corresponding cpuid bits.
+// 
+// UPDATE(23.10.2025):
+// 
+// We can now boot with HVCI enabled. I realized, that if we just map the secure kernel pages as RWX instead of 
+// no permissions, the rest of the permissions can be implemented correctly. Well, except that we also don't get
+// access to Mode based execution controls. These give use both a kernel execute and a user execute bit.
+// Therefore, I map pages which are user-executable also as kernel executable (this probably means all pages are executable).
+// 
+// Also see the code for HvModifyVtlProtectionMask inside helper_vmcall.
+// 
+// So TLDR: The kernel now thinks it works, though it kinda really does not :) I call that success!
+// 
 #define ENABLE_VSM 0
 
 

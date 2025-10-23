@@ -778,6 +778,10 @@ static u64 patch_in_cr3_for_virtual_address(struct context *context, u64 virtual
     // Check the current cr3.
     if(translate_address(context, virtual_address, PERMISSION_read)) return cr3;
     
+    // A bit weird, but this can crash because translate_address has an internal error.
+    // Maybe I should fix it on that side instead...
+    struct crash_information crash_information = enter_debugging_routine(context);
+    
     struct{
         u64 cr3;
         char *cr3_name;
@@ -804,6 +808,8 @@ static u64 patch_in_cr3_for_virtual_address(struct context *context, u64 virtual
         // If we could not find the "right" cr3, just use the current one.
         context->registers.cr3 = cr3;
     }
+    
+    exit_debugging_routine(context, crash_information);
     
     return cr3;
 }

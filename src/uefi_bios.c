@@ -1927,6 +1927,7 @@ void entry(u8 *boot_file_base, u64 page_table_pages, u64 efi_system_partition_st
     }
     
     {
+        // @cleanup: It appears, this is simply not part of the memory map when I check it in hyper-v.
         u64 mg2b = 0xf8000000;
         u64 mg2l = 0x08000000;
         efi_allocate_pages(/*AllocateAddress*/2, EfiReservedMemoryType, /*number_of_pages*/(mg2l / 0x1000), &mg2b);

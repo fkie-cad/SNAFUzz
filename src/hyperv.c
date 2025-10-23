@@ -1085,7 +1085,8 @@ void start_execution_hypervisor(struct context *context){
                         print("[" __FUNCTION__ "] [vmbus] Unhandled monitor_page%d access.\n", monitor_id + 1);
                     }
                     
-                }else{ 
+                }else if(context->registers.vtl_state.current_vtl == 1 || guest_physical_address >= /*frame buffer*/0xf8000000){ // @cleanup: Why do we have to have the address of the frame buffer here?
+                    
                     if(MemoryAccess->AccessInfo.AccessType == /*WHvMemoryAccessRead*/0 || MemoryAccess->AccessInfo.AccessType == /*WHvMemoryAccessExecute*/2){
                         u8 *translated = get_physical_memory_for_read(context, guest_physical_address);
                         
@@ -1110,12 +1111,16 @@ void start_execution_hypervisor(struct context *context){
                         }
                     }
                     
+                    instruction_length = 0;
+                    
                     // @note: For now randomly exit if the page was not contained in the dmp.
                     if(context->crash){
                         handle_debugger(context);
                     }
+                }else{
+                    print("WHvRunVpExitReasonMemoryAccess phys = %p virt = %p access = %d unmapped = %d virt-valid = %d\n", MemoryAccess->GuestPhysicalAddress, MemoryAccess->GuestVirtualAddress, MemoryAccess->AccessInfo.AccessType, MemoryAccess->AccessInfo.GpaUnmapped, MemoryAccess->AccessInfo.GvaValid);
+                    handle_debugger(context);
                 }
-                
             }break;
             
             case /*WHvRunVpExitReasonX64IoPortAccess*/2:{
