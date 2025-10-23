@@ -1501,7 +1501,7 @@ char *get_image_name(struct context *context, char image_name[16], u64 *pid){
     struct crash_information crash_information = enter_debugging_routine(context);
     
     u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
-    u64 cr3 = patch_in_kernel_cr3(context);
+    u64 cr3 = patch_in_cr3_for_virtual_address(context, kpcr, /*print cr3*/false);
     
     u64 thread  = guest_read(u64, kpcr   + get_member_offset(context, string("nt!_KPCR.Prcb.CurrentThread")));
     u64 process = guest_read(u64, thread + get_member_offset(context, string("nt!_KTHREAD.ApcState.Process")));
@@ -2877,9 +2877,9 @@ void handle_debugger(struct context *context){
             
             if(!count) count = 10;
             
-            u64 cr3 = patch_in_kernel_cr3(context);
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
             
-            for(u64 i = 0; i < count; i++){
+            for(u64 index = 0; index < count; index++){
                 print("%p: ", address);
                 int crash = 0;
                 address += print_disassembly(context, address, &crash);
@@ -3018,7 +3018,7 @@ void handle_debugger(struct context *context){
                 
                 int count = 0;
                 
-                u64 user_cr3 = patch_in_kernel_cr3(context);
+                u64 user_cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
                 do{
                     print("Entry %d at %p:\n", count, address);
                     pdb_dump_type(context, module->pdb_context, type_name, /*member_string*/string(""), address, have_address);
@@ -3039,7 +3039,7 @@ void handle_debugger(struct context *context){
             }else{
                 // dt <type> [<address>]
                 
-                u64 user_cr3 = patch_in_kernel_cr3(context);
+                u64 user_cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
                 
                 pdb_dump_type(context, module->pdb_context, type_name, member_string, address, have_address);
                 
@@ -3086,7 +3086,7 @@ void handle_debugger(struct context *context){
                 }
             }
             
-            u64 user_cr3 = patch_in_kernel_cr3(context);
+            u64 user_cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
             
             switch(command.data[1]){
                 case 'b':{
@@ -4050,7 +4050,7 @@ void handle_debugger(struct context *context){
             u64 IrpAddress;
             if(!line.size){
                 u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
-                u64 cr3 = patch_in_kernel_cr3(context);
+                u64 cr3 = patch_in_cr3_for_virtual_address(context, kpcr, /*print cr3*/true);
                 
                 u64 thread = guest_read(u64, kpcr   + get_member_offset(context, string("nt!_KPCR.Prcb.CurrentThread")));
                 IrpAddress = guest_read(u64, thread + get_member_offset(context, string("nt!_ETHREAD.IrpList"))) - get_member_offset(context, string("nt!_IRP.ThreadListEntry"));
@@ -4096,7 +4096,7 @@ void handle_debugger(struct context *context){
             // 
             
             u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
-            u64 cr3 = patch_in_kernel_cr3(context);
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, kpcr, /*print cr3*/true);
             
             u64 thread  = guest_read(u64, kpcr   + get_member_offset(context, string("nt!_KPCR.Prcb.CurrentThread")));
             u64 process = guest_read(u64, thread + get_member_offset(context, string("nt!_KTHREAD.ApcState.Process")));
@@ -4190,7 +4190,7 @@ void handle_debugger(struct context *context){
             
             u64 kpcr  = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
             u64 kprcb = kpcr + get_member_offset(context, string("nt!_KPCR.Prcb"));
-            u64 cr3 = patch_in_kernel_cr3(context);
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, kprcb, /*print cr3*/true);
             
             u64 current_thread = guest_read(u64, kpcr + get_member_offset(context, string("nt!_KPCR.Prcb.CurrentThread")));
             u64 process = guest_read(u64, current_thread + get_member_offset(context, string("nt!_KTHREAD.ApcState.Process")));

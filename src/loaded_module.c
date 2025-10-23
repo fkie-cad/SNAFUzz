@@ -110,10 +110,11 @@ static void loaded_module_try_to_load_pdb(struct context *context, struct loaded
         // If it crashes, we just want to return (we have not _tried_ to load the PDB yet,
         // only the GUID).
         // 
-        struct crash_information crash_information = enter_debugging_routine(context);
-        u64 user_cr3 = patch_in_kernel_cr3(context);
         
         u64 guest_image_base = module->guest_image_base;
+        
+        struct crash_information crash_information = enter_debugging_routine(context);
+        u64 user_cr3 = patch_in_cr3_for_virtual_address(context, guest_image_base, /*print cr3*/false);
         
         u32 pe_header_offset = guest_read(u32, guest_image_base + 0x3c);
         pe_header_offset += 4;
@@ -1042,41 +1043,30 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
     struct crash_information crash_information = enter_debugging_routine(context);
     
     {
-        if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers); // Search for the kernel at vtl0!
         
-        u64 addresses_to_check[] = {
-            // 
-            // @cleanup: Maybe find more things addresses here which are inside ntoskrnl here.
-            // 
-            context->registers.ia32_lstar,
-        };
+        u64 address = context->registers.vtl_state.current_vtl ? context->registers.vtl_state.ia32_lstar : context->registers.ia32_lstar;
         
-        for(u32 address_index = 0; address_index < array_count(addresses_to_check); address_index += 1){
-            
-            u64 address = addresses_to_check[address_index];
-            
-            // @note: For some reason (at least) the header of some intel driver is at offset 169000
-            //        from the kernel. We could maybe check some other stuff, to eliminate these false 
-            //        postives, but luckily for us, because the kernel uses large pages, it is 0x200000
-            //        aligned. So we can have this bigger step.
-            u64 step = 0x200000;
-            
-            address &= ~(step - 1);
-            
-            for(; !context->crash; address -= step){
-                if(guest_read(u16, address) == 'ZM'){
-                    u32 pe_header_offset = guest_read(u32, address + 0x3c);
-                    u32 image_size       = guest_read(u32, address + pe_header_offset + 4 + 20 + 56);
-                    
-                    nt = parse_loaded_module(context, address, image_size, string("nt"));
-                    if(nt) break;
-                }
+        u64 cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/false);
+        
+        // @note: For some reason (at least) the header of some intel driver is at offset 169000
+        //        from the kernel. We could maybe check some other stuff, to eliminate these false 
+        //        postives, but luckily for us, because the kernel uses large pages, it is 0x200000
+        //        aligned. So we can have this bigger step.
+        u64 step = 0x200000;
+        
+        address &= ~(step - 1);
+        
+        for(; !context->crash; address -= step){
+            if(guest_read(u16, address) == 'ZM'){
+                u32 pe_header_offset = guest_read(u32, address + 0x3c);
+                u32 image_size       = guest_read(u32, address + pe_header_offset + 4 + 20 + 56);
+                
+                nt = parse_loaded_module(context, address, image_size, string("nt"));
+                if(nt) break;
             }
-            
-            if(nt) break;
         }
         
-        if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
+        context->registers.cr3 = cr3;
     }
     
     exit_debugging_routine(context, crash_information);
@@ -1084,77 +1074,57 @@ struct loaded_module *maybe_find_and_load_ntoskrnl(struct context *context){
     return nt;
 }
 
-void load_module_list(struct context *context, struct loaded_module *nt){
-    struct crash_information crash_information = enter_debugging_routine(context);
-    
-    // 
-    // Load the kernel module list in 'PsLoadedModuleList'.
-    // 
-    
-    u64 PsLoadedModuleList = get_symbol_from_module(context, nt, string("PsLoadedModuleList"));
-    load_modules_from_list(context, PsLoadedModuleList);
-    
-    // 
-    // Load the user module list by checking the '_PEB'.
-    // 
-    
-    u64 TIB = (context->registers.cs.selector & 3) ? context->registers.gs_base : context->registers.gs_swap;
-    u64 PEB = guest_read(u64, TIB + get_member_offset(context, string("nt!_TEB.ProcessEnvironmentBlock")));
-    u64 Ldr = guest_read(u64, PEB + get_member_offset(context, string("nt!_PEB.Ldr")));
-    
-    u64 InMemoryOrderModuleList = guest_read(u64, Ldr + get_member_offset(context, string("nt!_PEB_LDR_DATA.InMemoryOrderModuleList")));
-    
-    u64 DataTableEntryLink = InMemoryOrderModuleList;
-    do{
-        u64 DataTableEntry = DataTableEntryLink - get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.InMemoryOrderLinks"));
-        
-        u64 DllBase = guest_read(u64, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.DllBase")));
-        u32 DllSize = guest_read(u32, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.SizeOfImage")));
-        
-        if(DllBase){
-            struct string BaseDllName = guest_read_unicode_string(context, &context->scratch_arena, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.FullDllName")));
-            
-            parse_loaded_module(context, DllBase, DllSize, BaseDllName);
-        }
-        
-        DataTableEntryLink = guest_read(u64, DataTableEntryLink);
-    }while(!context->crash && (DataTableEntryLink != InMemoryOrderModuleList) && DataTableEntryLink);
-    
-    exit_debugging_routine(context, crash_information);
-}
-
 
 struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context){
     
+    struct crash_information crash_information = enter_debugging_routine(context);
+    
     struct loaded_module *nt = maybe_find_and_load_ntoskrnl(context);
-    
-    if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
-    
     if(nt){
-        load_module_list(context, nt);
-    }else{
         // 
-        // If `KiKvaShadow` is active, we try the _other_ cr3 to find the module list.
+        // Load the kernel module list in 'PsLoadedModuleList'.
         // 
-        u64 cr3 = context->registers.cr3;
         
-        // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
-        //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
-        context->registers.cr3 = guest_read(u64, context->registers.gs_swap + 0xb000) & 0x7ffffffffffff000;
+        u64 PsLoadedModuleList = get_symbol_from_module(context, nt, string("PsLoadedModuleList"));
+        u64 cr3 = patch_in_cr3_for_virtual_address(context, PsLoadedModuleList, /*print cr3*/false);
         
-        nt = maybe_find_and_load_ntoskrnl(context);
-        if(nt) load_module_list(context, nt);
+        load_modules_from_list(context, PsLoadedModuleList);
+        
+        // 
+        // Load the user module list by checking the '_PEB'.
+        // 
+        
+        u64 TIB = (context->registers.cs.selector & 3) ? context->registers.gs_base : context->registers.gs_swap;
+        u64 PEB = guest_read(u64, TIB + get_member_offset(context, string("nt!_TEB.ProcessEnvironmentBlock")));
+        u64 Ldr = guest_read(u64, PEB + get_member_offset(context, string("nt!_PEB.Ldr")));
+        
+        u64 InMemoryOrderModuleList = guest_read(u64, Ldr + get_member_offset(context, string("nt!_PEB_LDR_DATA.InMemoryOrderModuleList")));
+        
+        u64 DataTableEntryLink = InMemoryOrderModuleList;
+        do{
+            u64 DataTableEntry = DataTableEntryLink - get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.InMemoryOrderLinks"));
+            
+            u64 DllBase = guest_read(u64, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.DllBase")));
+            u32 DllSize = guest_read(u32, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.SizeOfImage")));
+            
+            if(DllBase){
+                struct string BaseDllName = guest_read_unicode_string(context, &context->scratch_arena, DataTableEntry + get_member_offset(context, string("nt!_LDR_DATA_TABLE_ENTRY.FullDllName")));
+                
+                parse_loaded_module(context, DllBase, DllSize, BaseDllName);
+            }
+            
+            DataTableEntryLink = guest_read(u64, DataTableEntryLink);
+        }while(!context->crash && (DataTableEntryLink != InMemoryOrderModuleList) && DataTableEntryLink);
         
         context->registers.cr3 = cr3;
     }
     
-    if(context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
-    
-    struct loaded_module *secure_kernel = get_loaded_module(string("securekernel"));
-    if(!secure_kernel){
-        if(!context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
+    struct loaded_module *securekernel = get_loaded_module(string("securekernel"));
+    if(!securekernel){
         
-        u64 address = context->registers.ia32_lstar;
+        u64 address = context->registers.vtl_state.current_vtl ? context->registers.ia32_lstar : context->registers.vtl_state.ia32_lstar;
+        
+        u64 cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/false);
         
         address &= ~0xfff;
         
@@ -1163,15 +1133,17 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
                 u32 pe_header_offset = guest_read(u32, address + 0x3c);
                 u32 image_size       = guest_read(u32, address + pe_header_offset + 4 + 20 + 56);
                 
-                struct string name = {0};
+                struct string name = string("securekernel");
                 
                 parse_loaded_module(context, address, image_size, name);
                 break;
             }
         }
         
-        if(!context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
+        context->registers.cr3 = cr3;
     }
+    
+    exit_debugging_routine(context, crash_information);
     
     return nt;
 }

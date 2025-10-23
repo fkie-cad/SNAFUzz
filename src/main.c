@@ -756,21 +756,55 @@ void handle_debugger(struct context *context);
 #include "apic.c"
 #include "memory_unit.c"
 
-static u64 patch_in_kernel_cr3(struct context *context){
-    u64 cr3 = context->registers.cr3;
-    if(context->registers.vtl_state.current_vtl == 0){
-        // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
-        //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
-        u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
-        
-        // @note: If we don't have a kpcr I assume, that we are pre-boot and don't want to change the cr3.
-        if(kpcr){
-            u64 kernel_page_table = guest_read(u64, kpcr + 0xb000);
-            if(kernel_page_table){ // This happend to be 0, when VaShadows might have been off? Investigate.
-                context->registers.cr3 = kernel_page_table & 0x7ffffffffffff000;
-            }
+static u64 kernel_cr3(struct context *context){
+    // "If CR4.PCIDE = 1, bit 63 of the source operand to MOV to CR3 determines 
+    //  whether the instruction invalidates entries in the TLBs and the paging-structure caches."
+    u64 kpcr = (context->registers.cs.selector & 3) ? context->registers.gs_swap : context->registers.gs_base;
+    
+    // @note: If we don't have a kpcr I assume, that we are pre-boot and don't want to change the cr3.
+    if(kpcr){
+        u64 kernel_page_table = guest_read(u64, kpcr + 0xb000);
+        if(kernel_page_table){ // This happend to be 0, when VaShadows might have been off? Investigate.
+            return kernel_page_table;
         }
     }
+    return 0;
+}
+
+static u64 patch_in_cr3_for_virtual_address(struct context *context, u64 virtual_address, int print_cr3){
+    
+    u64 cr3 = context->registers.cr3;
+    
+    // Check the current cr3.
+    if(translate_address(context, virtual_address, PERMISSION_read)) return cr3;
+    
+    struct{
+        u64 cr3;
+        char *cr3_name;
+    } cr3_info[] = {
+        kernel_cr3(context), "kernel cr3",
+        context->registers.vtl_state.cr3, "vtl cr3",
+    };
+    
+    char *found = null;
+    
+    for(u32 index = 0; index < array_count(cr3_info); index++){
+        context->registers.cr3 = cr3_info[index].cr3;
+        if(translate_address(context, virtual_address, PERMISSION_read)){
+            found = cr3_info[index].cr3_name;
+            break;
+        }
+    }
+    
+    if(found && print_cr3){
+        print("Using %s.\n", found);
+    }
+    
+    if(!found){
+        // If we could not find the "right" cr3, just use the current one.
+        context->registers.cr3 = cr3;
+    }
+    
     return cr3;
 }
 
