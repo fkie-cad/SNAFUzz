@@ -1118,8 +1118,9 @@ void start_execution_hypervisor(struct context *context){
                         handle_debugger(context);
                     }
                 }else{
-                    print("WHvRunVpExitReasonMemoryAccess phys = %p virt = %p access = %d unmapped = %d virt-valid = %d\n", MemoryAccess->GuestPhysicalAddress, MemoryAccess->GuestVirtualAddress, MemoryAccess->AccessInfo.AccessType, MemoryAccess->AccessInfo.GpaUnmapped, MemoryAccess->AccessInfo.GvaValid);
-                    handle_debugger(context);
+                    if(PRINT_VSM_EVENTS){
+                        print("WHvRunVpExitReasonMemoryAccess phys = %p virt = %p access = %d unmapped = %d virt-valid = %d\n", MemoryAccess->GuestPhysicalAddress, MemoryAccess->GuestVirtualAddress, MemoryAccess->AccessInfo.AccessType, MemoryAccess->AccessInfo.GpaUnmapped, MemoryAccess->AccessInfo.GvaValid);
+                    }
                 }
             }break;
             

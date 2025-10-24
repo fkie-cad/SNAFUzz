@@ -1117,6 +1117,7 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
         }while(!context->crash && (DataTableEntryLink != InMemoryOrderModuleList) && DataTableEntryLink);
         
         context->registers.cr3 = cr3;
+        context->crash = CRASH_none;
     }
     
     struct loaded_module *securekernel = get_loaded_module(string("securekernel"));
@@ -1135,9 +1136,15 @@ struct loaded_module *maybe_find_nt_and_load_module_list(struct context *context
                 
                 struct string name = string("securekernel");
                 
-                parse_loaded_module(context, address, image_size, name);
+                securekernel = parse_loaded_module(context, address, image_size, name);
                 break;
             }
+        }
+        
+        if(securekernel){
+            // @cleanup: This will probably nuke where Cng.sys is... but whatever?
+            u64 SkLoadedModuleList = get_symbol_from_module(context, securekernel, string("SkLoadedModuleList"));
+            load_modules_from_list(context, SkLoadedModuleList);
         }
         
         context->registers.cr3 = cr3;

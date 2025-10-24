@@ -3789,6 +3789,8 @@ void handle_debugger(struct context *context){
             
             u64 PsLoadedModuleList = get_symbol_from_module(context, nt, string("PsLoadedModuleList"));
             
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, PsLoadedModuleList, /*print cr3*/true);
+            
             print("PsLoadedModuleList %p\n", PsLoadedModuleList);
             
             for(u64 entry_guest_address = guest_read(u64, PsLoadedModuleList); !context->crash && entry_guest_address && (entry_guest_address != PsLoadedModuleList); entry_guest_address = guest_read(u64, entry_guest_address)){
@@ -3800,8 +3802,33 @@ void handle_debugger(struct context *context){
                 
                 print("%p %p %.*s\n", image_base, image_base + image_size, name.size, name.data);
             }
+            
+            context->registers.cr3 = cr3;
             continue;
         }
+        
+        if(string_match(command, string("secure_kernel_modules"))){
+            
+            u64 SkLoadedModuleList = get_symbol(context, string("securekernel!SkLoadedModuleList"));
+            
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, SkLoadedModuleList, /*print cr3*/true);
+            
+            print("SkLoadedModuleList %p\n", SkLoadedModuleList);
+            
+            for(u64 entry_guest_address = guest_read(u64, SkLoadedModuleList); !context->crash && entry_guest_address && (entry_guest_address != SkLoadedModuleList); entry_guest_address = guest_read(u64, entry_guest_address)){
+                
+                u64 image_base = guest_read(u64, entry_guest_address + 6 * 8);
+                u64 image_size = guest_read(u64, entry_guest_address + 8 * 8);
+                
+                struct string name = guest_read_unicode_string(context, &context->scratch_arena, entry_guest_address + 9 * 8);
+                
+                print("%p %p %.*s\n", image_base, image_base + image_size, name.size, name.data);
+            }
+            
+            context->registers.cr3 = cr3;
+            continue;
+        }
+        
         
         if(string_match(command, string("load_pdb"))){
             

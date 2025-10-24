@@ -738,8 +738,6 @@ void set_crash_information(struct context *context, enum crash_type crash, u64 c
     if(context->crash == CRASH_none){
         context->crash         = crash;
         context->crash_address = crash_address;
-        
-        if((crash == CRASH_internal_error) && !globals.fuzzing && !globals.in_debugger) os_debug_break();
     }
 }
 

@@ -767,6 +767,7 @@ void helper_interrupt_instruction(struct context *context, u8 interrupt_number){
         switch(context->registers.rax){
             
             case 1:{
+                if(globals.fuzzing && !globals.debugger_mode) break;
                 // DebugPrint
                 u8 buffer[0x100];
                 
@@ -2784,9 +2785,11 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 u32 flags = Parameters->MapFlags & 0x7;
                 if(Parameters->MapFlags & 0x8) flags |= 4;
                 
-                s32 WHvMapGpaRangeResult = WHvMapGpaRange(context->Partition, SourceAddress, Gpa, 0x1000, flags);
-                if(WHvMapGpaRangeResult != 0){
-                    print("WHvMapGpaRangeResult = %x (%p %p 0x1000, %x)\n", WHvMapGpaRangeResult, SourceAddress, Gpa, flags);
+                if(context->use_hypervisor){
+                    s32 WHvMapGpaRangeResult = WHvMapGpaRange(context->Partition, SourceAddress, Gpa, 0x1000, flags);
+                    if(WHvMapGpaRangeResult != 0){
+                        print("WHvMapGpaRangeResult = %x (%p %p 0x1000, %x)\n", WHvMapGpaRangeResult, SourceAddress, Gpa, flags);
+                    }
                 }
             }
             
@@ -2957,8 +2960,13 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 struct{
                     u32 register_name;
                     u32 padding[3];
-                    u64 value_low;
-                    u64 value_high;
+                    union{
+                        struct{
+                            u64 value_low;
+                            u64 value_high;
+                        };
+                        struct segment segment;
+                    };
                 }mapping[]; // I think this would be an array of rep_count registers?
             } *Parameters = (void *)&fast_buffer;
             
@@ -3058,12 +3066,34 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 }break;
                 
                 
-                // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
-                case 0x00040004: context->registers.vtl_state.cr8 = Parameters->mapping[0].value_low; break;
+                // @note: These are set during SkpgxDefeatureProcessorForBugCheck, other than cr8 I don't think any other are ever set.
+                case 0x00020011: context->registers.vtl_state.rflags = Parameters->mapping[0].value_low; break;
+                
+                case 0x00040003: context->registers.vtl_state.cr4 = Parameters->mapping[0].value_low; break;
+                case 0x00040004: context->registers.vtl_state.cr8 = Parameters->mapping[0].value_low; break; // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
+               
+                case 0x00060006: context->registers.vtl_state.ldt = Parameters->mapping[0].segment; break;
+                case 0x00070000: context->registers.vtl_state.idt_limit = Parameters->mapping[0].value_low >> 48; context->registers.vtl_state.idt_base = Parameters->mapping[0].value_high; break;
+                case 0x00070001: context->registers.vtl_state.gdt_limit = Parameters->mapping[0].value_low >> 48; context->registers.vtl_state.gdt_base = Parameters->mapping[0].value_high; break;
+                
+                case 0x00080002: context->registers.vtl_state.gs_swap      = Parameters->mapping[0].value_low; break;
+                case 0x00080001: context->registers.vtl_state.ia32_efer    = Parameters->mapping[0].value_low; break;
+                case 0x00080004: context->registers.vtl_state.ia32_pat     = Parameters->mapping[0].value_low; break;
+                case 0x00080005: {} break; // Sysenter CS not sure we have that?
+                case 0x00080000: context->registers.vtl_state.ia32_tsc     = Parameters->mapping[0].value_low; break;
+                case 0x0008007B: context->registers.vtl_state.ia32_tsc_aux = Parameters->mapping[0].value_low; break;
+                case 0x00080009: context->registers.vtl_state.ia32_lstar   = Parameters->mapping[0].value_low; break;
+                case 0x0008000A: context->registers.vtl_state.ia32_cstar   = Parameters->mapping[0].value_low; break;
+                case 0x00080008: context->registers.vtl_state.ia32_star    = Parameters->mapping[0].value_low; break;
+                case 0x0008000B: context->registers.vtl_state.ia32_fmask   = Parameters->mapping[0].value_low; break;
                 
                 default:{
                     print("**** Unhandled SetVpRegister 0x%x!\n", Parameters->mapping[0].register_name);
-                    handle_debugger(context);
+                    if(globals.fuzzing){
+                        set_crash_information(context, CRASH_internal_error, (u64)"Unhandled SetVpRegister");
+                    }else{
+                        handle_debugger(context);
+                    }
                 }break;
             }
             
@@ -3199,13 +3229,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             }
             
             invalidate_translate_lookaside_buffers(context); // We need to invalidate the tlb because the cr3 changed (we could do this only for jit, but whatever!).
-            
-            // handle_debugger(context);
-            void initialize_jit(struct context *context);
-            initialize_jit(context);
-            if(globals.single_stepping && context->use_hypervisor){
-                hypervisor_set_breakpoint_on_next_instruction(context, registers);
-            }
         }break;
         
         default:{
