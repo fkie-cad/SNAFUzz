@@ -7043,17 +7043,17 @@ struct crash_information start_execution_jit(struct context *context){
         
         result = jit_execute_until_exception(context);
         
-        if(result.crash_type >= CRASH_exception_count) break;
-        
-        if(result.crash_type == CRASH_execute && result.crash_address == DEFAULT_RETURN_RIP){
+        if((result.crash_type == CRASH_end_of_fuzz_case) || (result.crash_type == CRASH_execute && result.crash_address == DEFAULT_RETURN_RIP)){
             //
             // We succeeded to execute what we wanted!
             // 
             result.crash_type = CRASH_none;
             context->crash    = CRASH_none;
-            context->registers.rsp -= 8; // Avoid rsp wandering off because of the return.
+            if(result.crash_type == CRASH_execute) context->registers.rsp -= 8; // Avoid rsp wandering off because of the return.
             return result;
         }
+        
+        if(result.crash_type >= CRASH_exception_count) break;
         
         if(PRINT_EXECUTION_EVENTS || PRINT_INTERRUPT_EVENTS){
             u64 pid = 0;

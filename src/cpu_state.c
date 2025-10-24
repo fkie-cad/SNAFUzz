@@ -1494,6 +1494,8 @@ enum crash_type{
     CRASH_timeout,                   // The fuzz case timed out.
     CRASH_uninitialized_memory_leak, // Memory which was marked _uninitialized_ by the extra permissions was written to user space.
     
+    CRASH_end_of_fuzz_case, // Can be used instead of the `DEFAULT_RETURN_RIP` to mark the end of a fuzz case.
+    
     //
     // Emulator errors.
     //
@@ -1529,6 +1531,8 @@ static char *crash_type_string[] = {
     [CRASH_double_free]              = "double_free",
     [CRASH_timeout]                  = "timeout",
     [CRASH_uninitialized_memory_leak] = "uninitialized_memory_leak",
+    
+    [CRASH_end_of_fuzz_case] = "end_of_fuzz_case",
     
     [CRASH_unimplemented_instruction] = "unimplemented_instruction",
     [CRASH_internal_error]            = "internal_error", 
