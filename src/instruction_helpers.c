@@ -2215,23 +2215,19 @@ void helper_wrmsr(struct context *context, struct registers *registers){
             registers->hv_x64_msr_siefp = value;
         }break;
         
-        case HV_X64_MSR_SINT0:{ // Concerning!
-            print("HV_X64_MSR_SINT0 %p\n", value);
+        case HV_X64_MSR_SINT0:{
             registers->hv_x64_msr_sint0 = value;
         }break;
         
-        case HV_X64_MSR_SINT1:{ // Concerning!
-            print("HV_X64_MSR_SINT1 %p\n", value);
+        case HV_X64_MSR_SINT1:{
             registers->hv_x64_msr_sint1 = value;
         }break;
         
         case HV_X64_MSR_SINT2:{
-            // print("HV_X64_MSR_SINT2 %p\n", value);
             registers->hv_x64_msr_sint2 = value;
         }break;
         
         case HV_X64_MSR_SINT3:{
-            // print("HV_X64_MSR_SINT3 %p\n", value);
             registers->hv_x64_msr_sint3 = value;
         }break;
         

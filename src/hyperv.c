@@ -1085,7 +1085,7 @@ void start_execution_hypervisor(struct context *context){
                         print("[" __FUNCTION__ "] [vmbus] Unhandled monitor_page%d access.\n", monitor_id + 1);
                     }
                     
-                }else if(context->registers.vtl_state.current_vtl == 1 || guest_physical_address >= /*frame buffer*/0xf8000000){ // @cleanup: Why do we have to have the address of the frame buffer here?
+                }else if(context->registers.vtl_state.current_vtl == 1 || (/*frame buffer*/0xf8000000 <= guest_physical_address && guest_physical_address <= 0xf8000000 + sizeof(frame_buffer))){ // @cleanup: Why do we have to have the address of the frame buffer here?
                     
                     if(MemoryAccess->AccessInfo.AccessType == /*WHvMemoryAccessRead*/0 || MemoryAccess->AccessInfo.AccessType == /*WHvMemoryAccessExecute*/2){
                         u8 *translated = get_physical_memory_for_read(context, guest_physical_address);
@@ -1230,7 +1230,7 @@ void start_execution_hypervisor(struct context *context){
                                 registers->hv_x64_msr_stimer0_count = msr_input_value;
                                 set_next_timer_interrupt_time(context, registers);
                             }else{
-                                print("WARNING: Ignoring timer at vtl1\n");
+                                if(PRINT_VSM_EVENTS) print("WARNING: Ignoring timer at vtl1\n");
                             }
                         }break;
                         case HV_X64_MSR_STIMER0_CONFIG:{
@@ -1238,7 +1238,7 @@ void start_execution_hypervisor(struct context *context){
                                 registers->hv_x64_msr_stimer0_config = msr_input_value;
                                 set_next_timer_interrupt_time(context, registers);
                             }else{
-                                print("WARNING: Ignoring timer config at vtl1\n");
+                                if(PRINT_VSM_EVENTS) print("WARNING: Ignoring timer config at vtl1\n");
                             }
                         }break;
                         
