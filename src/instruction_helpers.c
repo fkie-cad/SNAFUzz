@@ -2768,6 +2768,27 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 }
             }
             
+            for(int index = 0; index < rep_count; index++){
+                u64 Page = Parameters->GpaPageList[index];
+                
+                u64 Index  = Page / 2;
+                u64 Nibble = Page % 2;
+                
+                u8 Mask = 0xf << (Nibble * 4);
+                u8 Value = (Parameters->MapFlags & 0xf) << (Nibble * 4);
+                
+                context->vtl0_permissions[Index] &= ~Mask; // @cleanup: Bounds check.
+                context->vtl0_permissions[Index] |= Value;
+                
+                if(globals.fuzzing){
+                    if(context->amount_of_dirty_vtl0_permissions == DIRTY_VTL0_PERMISSION_CAPACITY){
+                        set_crash_information(context, CRASH_timeout, (u64)"DIRTY_VTL0_PERMISSION_CAPACITY exceeded!");
+                    }else{
+                        context->dirty_vtl0_permssions[context->amount_of_dirty_vtl0_permissions++] = Page;
+                    }
+                }
+            }
+            
             if(Parameters->MapFlags == 0){
                 // See comment above, we have to somehow "merge" the permissions for VTL0 and VTL1.
                 // MapFlags == 0 probably means this is a secure kernel GPA.
@@ -2776,7 +2797,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             for(int index = 0; index < rep_count; index++){
                 u64 Gpa = Parameters->GpaPageList[index] << 12;  // @cleanup: maybe merge ranges?
-                u8 *SourceAddress = context->physical_memory + Gpa;
+                u8 *SourceAddress = context->physical_memory + Gpa; // @cleanup: Bounds check?
                 
                 // Well it seems, I cannot do mode based execution controls (separate executable bit for kernel and userspace) with `WHvMapGpaRange`.
                 // So I guess a page is executable if it is executable either in user space or in kernel space.
@@ -3110,6 +3131,10 @@ void helper_vmcall(struct context *context, struct registers *registers){
             } *Parameters = (void *)&fast_buffer;
             
             if(PRINT_VSM_EVENTS) print("HvCallEnablePartitionVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->TargetVtl, Parameters->Flags);
+            
+            u64 permission_size = (globals.snapshot.physical_memory_size / 0x1000) / 2; // 4 bits per physical page.
+            context->vtl0_permissions = os_allocate_memory(permission_size);
+            memset(context->vtl0_permissions, 0xff, permission_size);
         }break;
         
         case /*HvEnableVpVtl*/0x0f:{

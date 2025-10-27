@@ -306,6 +306,10 @@ struct context{
     u64 amount_of_dirty_physical_pages;
     u64 *dirty_physical_pages;
     
+    u8 *vtl0_permissions; // RWXU - for each physical page.
+    u64 *dirty_vtl0_permssions;
+    u64 amount_of_dirty_vtl0_permissions;
+    
     //
     // These are separate, as coverage arena only ever wants page aligned memory.
     //
@@ -970,6 +974,18 @@ void reset_to_snapshot(struct context *context){
     }
 #endif
     
+    // 
+    // Reset all vtl0 permissions marked dirty.
+    // 
+    
+    for(u64 dirty_permission_index = 0; dirty_permission_index < context->amount_of_dirty_vtl0_permissions; dirty_permission_index++){
+        u64 physical_page_index = context->dirty_vtl0_permssions[dirty_permission_index];
+        u64 permission_page_index = physical_page_index / 2;
+        
+        // Just reset both, who cares!
+        context->vtl0_permissions[permission_page_index] = globals.main_thread_context->vtl0_permissions[permission_page_index];
+    }
+    
     context->registers = globals.snapshot.registers;
     
     invalidate_translate_lookaside_buffers(context);
@@ -1041,6 +1057,14 @@ struct context *allocate_and_initialize_thread_context(int thread_index){
     context->vmbus = globals.main_thread_context->vmbus;
     
     context->thread_index = thread_index;
+    
+    if(globals.main_thread_context->vtl0_permissions){
+        u64 permission_size = (globals.snapshot.physical_memory_size / 0x1000) / 2; // 4 bits per physical page.
+        context->vtl0_permissions = os_allocate_memory(permission_size);
+        memcpy(context->vtl0_permissions, globals.main_thread_context->vtl0_permissions, permission_size);
+        
+        context->dirty_vtl0_permssions = push_data(&context->permanent_arena, u64, DIRTY_VTL0_PERMISSION_CAPACITY);
+    }
     
     target_reset(context);
     

@@ -10,6 +10,7 @@
 //     [2] registers
 //     [3] physical memory
 //     [4] frame buffer
+//     [5] vtl0 permissions
 // 
 // Snapshots are written from the debugger using the 'snapshot <file-name>' command
 // and can be loaded as a parameter. The snapshot file and in particular the 
@@ -28,7 +29,7 @@ int load_snapshot(struct context *context, char *file_name){
     struct {
         u64 start_offset;
         u64 end_offset;
-    } directory[5] = {0};
+    } directory[6] = {0};
     
     if(file.size < sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(snapshot_target) + sizeof(directory)){
         print("File '%s' is too small to be a snapshot file.\n", file_name);
@@ -270,6 +271,10 @@ int load_snapshot(struct context *context, char *file_name){
         }
     }
     
+    if(directory[5].end_offset != directory[5].start_offset){
+        // u64 vtl0_permission_size = directory[5].end_offset - directory[5].start_offset; @cleanup: check that this is correct?
+        context->vtl0_permissions = file.memory + directory[5].start_offset;
+    }
     
     print("Successfully loaded '%s'.\n", file_name);
     return 1;
@@ -410,7 +415,7 @@ void write_snapshot(struct context *context, char *file_name){
     struct {
         u64 start_offset;
         u64 end_offset;
-    } directory[5] = {0};
+    } directory[6] = {0};
     
     u64 header_size = sizeof(snapshot_magic) + sizeof(snapshot_version) + sizeof(snapshot_target) + sizeof(directory);
     u64 current_offset = (header_size + 0x1ff) & ~0x1ff;
@@ -437,9 +442,16 @@ void write_snapshot(struct context *context, char *file_name){
     current_offset += physical_memory_size;
     directory[3].end_offset = current_offset;
     
+    // Frame buffer.
     directory[4].start_offset = current_offset;
     current_offset += frame_buffer_size;
     directory[4].end_offset = current_offset;
+    
+    // Vtl0 permissions.
+    directory[5].start_offset = current_offset;
+    u64 vtl0_permission_size = ((globals.snapshot.physical_memory_size / 0x1000) / 2);
+    current_offset += context->vtl0_permissions ? vtl0_permission_size : 0;
+    directory[5].end_offset = current_offset;
     
     static u8 zero_buffer[0x1000];
     
@@ -581,6 +593,10 @@ void write_snapshot(struct context *context, char *file_name){
     fwrite(frame_buffer, 1, sizeof(frame_buffer), file);
     
     assert((u64)ftell64(file) == directory[4].end_offset);
+    
+    if(context->vtl0_permissions){
+        fwrite(context->vtl0_permissions, 1, vtl0_permission_size, file);
+    }
     
     fclose(file);
     

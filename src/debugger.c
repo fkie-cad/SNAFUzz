@@ -3598,13 +3598,32 @@ void handle_debugger(struct context *context){
             u64 address = parse_address(context, &line, &error);
             if(error) continue;
             
+            u64 cr3 = registers->cr3;
+            
+            if(line.size){
+                struct string cr3_string = line;
+                
+                if(string_match(cr3_string, string("vtl"))){
+                    cr3 = registers->vtl_state.cr3;
+                }else if(string_match(cr3_string, string("kernel"))){
+                    cr3 = kernel_cr3(context);
+                }else{
+                    cr3 = parse_address(context, &line, &error);
+                    
+                    if(error){
+                        print("Unable to parse specified cr3 '%.*s'. Known options are 'vtl' and 'kernel'.\n", cr3_string.size, cr3_string.data);
+                        continue;
+                    }
+                }
+            }
+            
             u64 offset_in_page = (address >>  0) & 0xfff;
             u32 p1_table_index = (address >> 12) & 0x1ff;
             u32 p2_table_index = (address >> 21) & 0x1ff;
             u32 p3_table_index = (address >> 30) & 0x1ff;
             u32 p4_table_index = (address >> 39) & 0x1ff;
             
-            u64 p4_table_offset = registers->cr3 & ~0xfff;
+            u64 p4_table_offset = cr3 & ~0xfff;
             print("Page Table Root = 0x%llx\n", p4_table_offset);
             u64 p4_entry = read_page_table_entry(context, p4_table_offset + 8 * p4_table_index);
             
@@ -3652,6 +3671,21 @@ void handle_debugger(struct context *context){
             
             u64 physical_address = (p1_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + offset_in_page;
             print("  --> Page is at %p\n", physical_address);
+            
+            if(context->vtl0_permissions){
+                u64 page_index = physical_address >> 12;
+                u64 permission_index  = page_index / 2;
+                u64 permission_nibble = page_index % 2;
+                
+                u8 value = (context->vtl0_permissions[permission_index] >> (permission_nibble * 4)) & 0xf;
+                
+                char *read  = value & 1 ? " read"  : "";
+                char *write = value & 2 ? " write" : "";
+                char *exec  = value & 4 ? " exec"  : "";
+                char *user  = value & 8 ? " user"  : "";
+                
+                print("      vtl0 permissions: 0x%x%s%s%s%s\n", value, read, write, exec, user);
+            }
             
             continue;
         }
