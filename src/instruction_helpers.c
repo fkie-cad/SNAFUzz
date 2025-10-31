@@ -2822,15 +2822,15 @@ void helper_vmcall(struct context *context, struct registers *registers){
             struct {
                 u64 PartitionId;
                 u32 VpIndex;
-                u64 ControlFlags;
+                u64 ControlFlags; // Permissions / Input vtl mask.
                 u64 GvaPage;
             } *Parameters = (void *)&fast_buffer;
             
-            // @cleanup: Do we need more?
+            // @cleanup: Do we need more? Cr0 Cr4?
             u64 current_cr3 = context->registers.cr3;
             context->registers.cr3 = context->registers.vtl_state.cr3;
             
-            if(PRINT_VSM_EVENTS) print("HvTranslateVirtualAddress %llx %p\n", Parameters->ControlFlags, Parameters->GvaPage);
+            if(PRINT_VSM_EVENTS) print("HvTranslateVirtualAddress %llx %d %p\n", Parameters->ControlFlags & 0x3f, Parameters->ControlFlags >> (8 * 7), Parameters->GvaPage);
             
             enum permissions permissions = 0;
             if(Parameters->ControlFlags & /*HV_TRANSLATE_GVA_VALIDATE_READ*/1)  permissions |= PERMISSION_read;
@@ -2850,12 +2850,36 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             u64 physical_address = translate_page_number_to_physical(context, page_number, permissions, &pte);
             
-            // *(u64 *)&registers->simd[1].xmmi = pte & PAGE_TABLE_present ? /*HvTranslateGvaSuccess*/0 : /*HvTranslateGvaPageNotPresent*/1;
-            // *((u64 *)&registers->simd[1].xmmi + 1) = physical_address>>12;
+            u64 return_code = /*HvTranslateGvaSuccess*/0;
+            if(!(pte & PAGE_TABLE_present)){
+                return_code = /*HvTranslateGvaPageNotPresent*/1;
+            }else if(physical_address >= globals.snapshot.physical_memory_size){
+                return_code = /*HvTranslateGvaGpaUnmapped*/4;
+            }else{
+                u64 page_index = physical_address >> 12;
+                u64 permission_index  = page_index / 2;
+                u64 permission_nibble = page_index % 2;
+                
+                u8 value = (context->vtl0_permissions[permission_index] >> (permission_nibble * 4)) & 0xf;
+                
+                if((permissions & value) != permissions){
+                    
+                    if((permissions & PERMISSION_write) && !(value & PERMISSION_write)){
+                        return_code = /*WHvTranslateGvaResultGpaNoWriteAccess*/6;
+                    }else if((permissions & PERMISSION_read) && !(value & PERMISSION_read)){
+                        return_code = /*WHvTranslateGvaResultGpaNoReadAccess*/5;
+                    }else{
+                        // ummm what to do here?
+                        print("Invalid case in HvTranlateVirtualAddress\n");
+                        handle_debugger(context);
+                    }
+                }
+            }
             
-            *(u64 *)&registers->simd[1].xmmi = 1; // @cleanup: This is used by SK patch guard to check it actually does what it wants to apperantly.
+            *(u64 *)&registers->simd[1].xmmi = return_code | (/*HvCacheTypeX64WriteBack*/6ull << 32);
+            *((u64 *)&registers->simd[1].xmmi + 1) = physical_address>>12;
             
-            if(PRINT_VSM_EVENTS) print("       -> %d %p\n", pte & PAGE_TABLE_present, physical_address);
+            if(PRINT_VSM_EVENTS) print("       -> %d %p\n", return_code, physical_address);
             
             context->skip_setting_permission_bits -= !set_page_table_bits;
             
