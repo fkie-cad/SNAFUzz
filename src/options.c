@@ -66,6 +66,8 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 
 #define ENABLE_VMRS _WIN32
 
+#define DIRTY_VTL0_PERMISSION_CAPACITY 0x1000
+
 //_____________________________________________________________________________________________________________________
 // JIT options
 

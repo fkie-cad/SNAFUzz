@@ -2994,7 +2994,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             if(PRINT_VSM_EVENTS){
                 print("HvCallSetVpRegisters %llx %x %x\n", Parameters->PartitionId, Parameters->VpIndex, Parameters->TargetVtl);
                 for(int index = 0; index < rep_count; index++){
-                    print("    %x %llx\n", Parameters->mapping[index].register_name, Parameters->mapping[index].value_low);
+                    print("    %x %llx %llx\n", Parameters->mapping[index].register_name, Parameters->mapping[index].value_low, Parameters->mapping[index].value_high);
                 }
             }
             

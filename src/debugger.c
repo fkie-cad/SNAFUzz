@@ -504,6 +504,8 @@ int hypervisor_set_breakpoint_on_next_instruction(struct context *context, struc
     return hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1);
 }
 
+void update_exception_exit_bitmap(struct context *context);
+
 //_____________________________________________________________________________________________________________________
 // Parsing addresses
 
@@ -582,6 +584,7 @@ u64 parse_directive(struct context *context, struct string directive, struct str
         
         struct string base_address_string = arguments[0];
         u64 base_address = parse_address(context, &base_address_string, error);
+        if(*error) return 0;
         
         u8 *base = push_data(&context->scratch_arena, u8, 0);
         
@@ -3086,7 +3089,7 @@ void handle_debugger(struct context *context){
                 }
             }
             
-            u64 user_cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
+            u64 user_cr3 = is_phys ? context->registers.cr3 : patch_in_cr3_for_virtual_address(context, address, /*print cr3*/true);
             
             switch(command.data[1]){
                 case 'b':{
@@ -4671,7 +4674,14 @@ void handle_debugger(struct context *context){
     
     if(globals.print_trace) globals.single_stepping = 1;
     
-    if(!context->use_hypervisor){
+    if(context->use_hypervisor){
+        
+        // To reduce the amount of Vmexits we have to perform, we update the exception bitmap to not 
+        // only include breakpoints when we are not single stepping. Only applicable to hyperv...
+        update_exception_exit_bitmap(context);
+        
+        if(globals.single_stepping) hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
+    }else{
         // If the breakpoint we are currently at did not change, skip it when we get back to it!
         // This is our hacky implementation of the RF flag.
         if(globals.breakpoint_hit_index >= 0 && memcmp(&breakpoint_hit, &globals.breakpoints[globals.breakpoint_hit_index], sizeof(breakpoint_hit)) == 0){

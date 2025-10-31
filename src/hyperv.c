@@ -844,8 +844,11 @@ void start_execution_hypervisor(struct context *context){
             registers->ldt = RegisterValues[RegisterIndex++].segment;
             registers->tr  = RegisterValues[RegisterIndex++].segment;
             
-            registers->idt_base  = RegisterValues[RegisterIndex].global_segment.Base;
-            registers->idt_limit = RegisterValues[RegisterIndex].global_segment.Limit;
+            if(RegisterValues[RegisterIndex].global_segment.Base != 0){
+                // Disgusting hack for secure kernel patch-guard zeroing out the idt.
+                registers->idt_base  = RegisterValues[RegisterIndex].global_segment.Base;
+                registers->idt_limit = RegisterValues[RegisterIndex].global_segment.Limit;
+            }
             RegisterIndex++;
             
             registers->gdt_base  = RegisterValues[RegisterIndex].global_segment.Base;
@@ -1028,7 +1031,10 @@ void start_execution_hypervisor(struct context *context){
                 } *MemoryAccess = (void *)ExitContext.ExitData;
                 
                 // :exit_context_zero_instruction_length
-                if(instruction_length == 0) instruction_length = decode_instruction(MemoryAccess->InstructionBytes).instruction_size;
+                if(instruction_length == 0){
+                    prefetch_instruction(context, registers->rip, MemoryAccess->InstructionBytes, sizeof(MemoryAccess->InstructionBytes));
+                    instruction_length = decode_instruction(MemoryAccess->InstructionBytes).instruction_size;
+                }
                 
                 u64 guest_physical_address = MemoryAccess->GuestPhysicalAddress & ~0xfff;
                 
@@ -1117,10 +1123,14 @@ void start_execution_hypervisor(struct context *context){
                     if(context->crash){
                         handle_debugger(context);
                     }
-                }else{
+                }else if(guest_physical_address < globals.snapshot.physical_memory_size){
                     if(PRINT_VSM_EVENTS){
                         print("WHvRunVpExitReasonMemoryAccess phys = %p virt = %p access = %d unmapped = %d virt-valid = %d\n", MemoryAccess->GuestPhysicalAddress, MemoryAccess->GuestVirtualAddress, MemoryAccess->AccessInfo.AccessType, MemoryAccess->AccessInfo.GpaUnmapped, MemoryAccess->AccessInfo.GvaValid);
+                        handle_debugger(context);
                     }
+                }else{
+                    print("Accessing guest physical memory outside of bounds (%p).\n", guest_physical_address);
+                    handle_debugger(context);
                 }
             }break;
             
@@ -1471,12 +1481,6 @@ void start_execution_hypervisor(struct context *context){
                         }
                     }else{
                         handle_debugger(context);
-                        
-                        // To reduce the amount of Vmexits we have to perform, we update the exception bitmap to not 
-                        // only include breakpoints when we are not single stepping.
-                        update_exception_exit_bitmap(context);
-                        
-                        if(globals.single_stepping) hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
                     }
                     
                     registers->dr6 &= ~0xf; // Clear the "Condition Detected" bits.

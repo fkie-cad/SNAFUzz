@@ -555,6 +555,7 @@ void exit_debugging_routine(struct context *context, struct crash_information or
 struct globals{
     
     int fuzzing; // Set once the main thread is about to start the threads.
+    int repro_mode;
     
     s64 thread_count;
     
@@ -1996,6 +1997,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         // depending on if this is set or not.
         //
         globals.fuzzing = 1;
+        globals.repro_mode = 1;
         
         if(start_in_debugger_mode){
             globals.debugger_mode = 1;
