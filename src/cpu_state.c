@@ -570,7 +570,6 @@ struct registers{
         
     } local_apic;
     
-    
     struct{
         u32 register_select;
         
@@ -652,6 +651,8 @@ struct registers{
             };
             u64 hv_x64_msr_sint[16];
         };
+        
+        struct local_apic local_apic;
     } vtl_state;
 };
 
@@ -1611,6 +1612,8 @@ static void switch_vtl(struct registers *registers){
         registers->vtl_state.hv_x64_msr_sint[index] = registers->hv_x64_msr_sint[index];
     }
     
+    registers->vtl_state.local_apic = registers->local_apic;
+    
     // 
     // Apply VTL state:
     // 
@@ -1660,4 +1663,6 @@ static void switch_vtl(struct registers *registers){
     for(u32 index = 0; index < 16; index++){
         registers->hv_x64_msr_sint[index] = current_vtl_state.hv_x64_msr_sint[index];
     }
+    
+    registers->local_apic = current_vtl_state.local_apic;
 }
