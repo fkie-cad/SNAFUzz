@@ -39,7 +39,7 @@ static char *breakpoint_type_to_string[] = {
 };
 
 // returns 'success'.
-int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum breakpoint_flags flags){
+int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum breakpoint_flags flags, struct string condition){
     
     u64 breakpoint_index = 0;
     for(;globals.breakpoints[breakpoint_index].type != BREAKPOINT_none; breakpoint_index++){
@@ -62,6 +62,7 @@ int add_breakpoint(enum breakpoint_type type, u64 address, u64 length, enum brea
     globals.breakpoints[breakpoint_index].flags   = flags;
     globals.breakpoints[breakpoint_index].address = address;
     globals.breakpoints[breakpoint_index].length  = length;
+    globals.breakpoints[breakpoint_index].condition = condition;
     
     globals.breakpoint_count += 1;
     
@@ -435,7 +436,7 @@ void hypervisor_clear_oneshot_breakpoint(struct registers *registers, u64 addres
     if(address == registers->dr3 && (globals.breakpoints[3].flags & BREAKPOINT_FLAG_oneshot)) registers->dr7 &= ~0x80; // disable dr3
 }
 
-int hypervisor_set_breakpoint(struct context *context, struct registers *registers, enum breakpoint_type type, enum breakpoint_flags flags, u64 address, u64 length){
+int hypervisor_set_breakpoint(struct context *context, struct registers *registers, enum breakpoint_type type, enum breakpoint_flags flags, u64 address, u64 length, struct string condition){
     
     int type_bits = 0;
     if(type == BREAKPOINT_read)  type_bits = 0b11; // @note: This is read or write, but whatever.
@@ -460,21 +461,25 @@ int hypervisor_set_breakpoint(struct context *context, struct registers *registe
             registers->dr7 = (registers->dr7 & ~(0b1111 << 16)) | (type_bits << 16) | (length_bits << 18) | 2;
             globals.breakpoints[0].type = type;
             globals.breakpoints[0].flags = flags;
+            globals.breakpoints[0].condition = condition;
         }else if((registers->dr7 & 8) == 0 || registers->dr1 == address){
             registers->dr1 = address;
             registers->dr7 = (registers->dr7 & ~(0b1111 << 20)) | (type_bits << 20) | (length_bits << 22) | 8;
             globals.breakpoints[1].type = type;
             globals.breakpoints[1].flags = flags;
+            globals.breakpoints[1].condition = condition;
         }else if((registers->dr7 & 0x20) == 0 || registers->dr2 == address){
             registers->dr2 = address;
             registers->dr7 = (registers->dr7 & ~(0b1111 << 24)) | (type_bits << 24) | (length_bits << 26) | 0x20;
             globals.breakpoints[2].type = type;
             globals.breakpoints[2].flags = flags;
+            globals.breakpoints[2].condition = condition;
         }else if((registers->dr7 & 0x80) == 0 || registers->dr3 == address){
             registers->dr3 = address;
             registers->dr7 = (registers->dr7 & ~(0b1111 << 28)) | (type_bits << 28) | (length_bits << 30) | 0x80;
             globals.breakpoints[3].type = type;
             globals.breakpoints[3].flags = flags;
+            globals.breakpoints[3].condition = condition;
         }else{
             print("[hypervisor] Too many breakpoints:\n");
             print("    [dr0] %p:", registers->dr0); print_symbol(context, registers->dr0); print("\n");
@@ -495,13 +500,13 @@ int hypervisor_set_breakpoint(struct context *context, struct registers *registe
 
 void hypervisor_set_breakpoint_on_vector(struct context *context, struct registers *registers, u32 vector_number){
     u64 offset = get_address_for_vector(context, registers, vector_number);
-    hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, offset, 1);
+    hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, offset, 1, (struct string){0});
 }
 
 int hypervisor_set_breakpoint_on_next_instruction(struct context *context, struct registers *registers){
     
     u64 next_rip = get_address_of_next_instruction(context, registers);
-    return hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1);
+    return hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1, (struct string){0});
 }
 
 void update_exception_exit_bitmap(struct context *context);
@@ -574,11 +579,11 @@ u64 parse_one_address(struct context *context, struct string symbol, int *error)
 
 u64 parse_directive(struct context *context, struct string directive, struct string *arguments, u64 amount_of_arguments, int *error){
     
-    if(string_match(directive, string("@search"))){
+    if(string_match(directive, string("search"))){
         
         if(amount_of_arguments != 2){
             *error = 1;
-            print("Expected two arguments.\n");
+            print("Expected two arguments in @search.\n");
             return 0;
         }
         
@@ -650,6 +655,30 @@ u64 parse_directive(struct context *context, struct string directive, struct str
         return 0;
     }
     
+    if(string_match(directive, string("u64")) || string_match(directive, string("u32")) || string_match(directive, string("u16")) || string_match(directive, string("u8"))){
+        if(amount_of_arguments != 1){
+            *error = 1;
+            print("Expected one argument in @u64.\n");
+            return 0;
+        }
+        
+        struct string string = arguments[0];
+        u64 address = parse_address(context, &string, error);
+        if(*error) return 0;
+        
+        u64 cr3 = patch_in_cr3_for_virtual_address(context, address, /*print cr3*/false);
+        
+        u64 value = 0;
+        if(string_match(directive, string("u64"))) value = guest_read(u64, address);
+        if(string_match(directive, string("u32"))) value = guest_read(u32, address);
+        if(string_match(directive, string("u16"))) value = guest_read(u16, address);
+        if(string_match(directive, string("u8"))) value = guest_read(u8, address);
+        
+        context->registers.cr3 = cr3;
+        
+        return value;
+    }
+    
     print("Unknown directive '%.*s'\n", directive.size, directive.data);
     *error = 1;
     
@@ -678,6 +707,8 @@ u64 parse_address_multiply(struct context *context, struct string *line, int *er
         u64 symbol_address;
         
         if(line->size && line->data[0] == '@'){
+            line->size -= 1;
+            line->data += 1;
             struct string directive = *line;
             
             while(line->size){
@@ -841,6 +872,40 @@ u64 parse_address(struct context *context, struct string *line, int *error){
     return address;
 }
 
+u64 parse_condition(struct context *context, struct string *line, int *error){
+    
+    //
+    // Parse conditions: '==', '!=', '>=', '<=', '<', '>'
+    //
+    
+    u64 a = parse_address(context, line, error);
+    if(*error) return 1;
+    
+    string_skip_whitespace(line);
+    if(!line->size){
+        print("Expected opterator in condition.\n");
+        *error = 1;
+        return 1; // Stop I guess.
+    }
+    
+    struct string operation = string_eat_nonwhitespace(line);
+    string_skip_whitespace(line);
+    
+    u64 b = parse_address(context, line, error);
+    if(*error) return 1;
+    
+    if(string_match(operation, string("=="))) return a == b;
+    if(string_match(operation, string("!="))) return a != b;
+    if(string_match(operation, string("<="))) return a <= b;
+    if(string_match(operation, string(">="))) return a >= b;
+    if(string_match(operation, string(">"))) return a > b;
+    if(string_match(operation, string("<"))) return a < b;
+    
+    print("Unhandled comparison operation '%.*s'. Expected one of '==', '!=', '>=', '<=', '<', '>'.\n", operation.size, operation.data);
+    *error = 1;
+    return 1;
+}
+
 void parse_breakpoint(struct context *context, enum breakpoint_type type, struct string *line){
     int error = 0;
     u64 address = parse_address(context, line, &error);
@@ -857,14 +922,22 @@ void parse_breakpoint(struct context *context, enum breakpoint_type type, struct
         if(error) return;
     }
     
-    if(line->size){
+    struct string condition = {0};
+    if(line->size >= 2 && line->data[0] == 'i' && line->data[1] == 'f'){
+        line->size -= 2;
+        line->data += 2;
+        
+        string_skip_whitespace(line);
+        condition.data = push_cstring_from_string(&context->permanent_arena, *line); // @leak
+        condition.size = line->size;
+    }else if(line->size){
         print("Warning: Junk '%.*s' after breakpoint.\n", line->size, line->data);
     }
     
     if(context->use_hypervisor){
-        hypervisor_set_breakpoint(context, &context->registers, type, BREAKPOINT_FLAG_none, address, length);
+        hypervisor_set_breakpoint(context, &context->registers, type, BREAKPOINT_FLAG_none, address, length, condition);
     }else{
-        add_breakpoint(type, address, length, BREAKPOINT_FLAG_none);
+        add_breakpoint(type, address, length, BREAKPOINT_FLAG_none, condition);
     }
 }
 
@@ -2074,23 +2147,10 @@ void handle_debugger(struct context *context){
     
     assert(!globals.in_debugger); // Make sure we don't call this recursively.
     
-    globals.in_debugger = true;
-    
     if(context->use_hypervisor){
         for(u32 bit_index = 0; bit_index < 4; bit_index++){
             if(registers->dr6 & (1ull << bit_index)){
                 globals.breakpoint_hit_index = bit_index;
-            }
-        }
-        
-        enum breakpoint_type type = globals.breakpoints[globals.breakpoint_hit_index].type;
-        
-        if(globals.breakpoint_hit_index >= 0){
-            if(globals.breakpoints[globals.breakpoint_hit_index].flags & BREAKPOINT_FLAG_oneshot){
-                // Don't print anything for oneshot breakpoints, as it get annoying,
-                // when single stepping.
-            }else{
-                print("\n%s breakpoint %x hit!\n", breakpoint_type_to_string[type], globals.breakpoint_hit_index);
             }
         }
     }else{
@@ -2098,37 +2158,52 @@ void handle_debugger(struct context *context){
         // We call 'check_breakpoint' here to set 'globals.breakpoint_hit_index'.
         // 
         check_breakpoint(BREAKPOINT_execute, context->registers.rip, 1);
+    }
+    
+    
+    //
+    // WARNING: In the loop below don't return as in the very end we reset 'globals.breakpoint_hit_index'.
+    //
+    if(globals.breakpoint_hit_index >= 0){
+        assert(globals.breakpoint_hit_index < (s32)array_count(globals.breakpoints));
         
-        //
-        // WARNING: In the loop below don't return as in the very end we reset 'globals.breakpoint_hit_index'.
-        //
-        if(globals.breakpoint_hit_index >= 0){
-            assert(globals.breakpoint_hit_index < (s32)array_count(globals.breakpoints));
+        if(globals.breakpoints[globals.breakpoint_hit_index].condition.data){
+            struct string line = globals.breakpoints[globals.breakpoint_hit_index].condition;
+            int error = 0;
+            u64 result = parse_condition(context, &line, &error);
             
-            enum breakpoint_type type = globals.breakpoints[globals.breakpoint_hit_index].type;
-            
-            if(globals.breakpoints[globals.breakpoint_hit_index].flags & BREAKPOINT_FLAG_oneshot){
-                //
-                // On a one-shot breakpoint (usually used with 'n' or 'f'), do not do some annoying print
-                // and delete the breakpoint after hitting it.
-                //
-                clear_breakpoint(globals.breakpoint_hit_index);
-            }else{
-                print("\n%s breakpoint %x hit!\n", breakpoint_type_to_string[type], globals.breakpoint_hit_index);
+            if(error){
+                line = globals.breakpoints[globals.breakpoint_hit_index].condition;
+                print("Error parsing condition '%.*s' of breakpoint %d.\n", line.size, line.data, globals.breakpoint_hit_index);
+            }else if(result == 0){
+                exit_debugging_routine(context, original_crash_information);
+                globals.breakpoint_hit_index = -1;
+                return;
             }
+        }
+        
+        if(globals.breakpoints[globals.breakpoint_hit_index].flags & BREAKPOINT_FLAG_oneshot){
+            //
+            // On a one-shot breakpoint (usually used with 'n' or 'f'), do not do some annoying print
+            // and delete the breakpoint after hitting it.
+            //
+            clear_breakpoint(globals.breakpoint_hit_index);
+        }else{
+            enum breakpoint_type type = globals.breakpoints[globals.breakpoint_hit_index].type;
+            print("\n%s breakpoint %x hit!\n", breakpoint_type_to_string[type], globals.breakpoint_hit_index);
         }
     }
     
     struct breakpoint breakpoint_hit = {0}; 
-    if(globals.breakpoint_hit_index >= 0) breakpoint_hit = globals.breakpoints[globals.breakpoint_hit_index];
+    if(globals.breakpoint_hit_index >= 0) breakpoint_hit = globals.breakpoints[globals.breakpoint_hit_index];    
     
+    globals.in_debugger = true;
     globals.single_stepping = false;
     
     if(globals.print_trace && globals.trace_file != stdout){
         // Make sure the trace file is flushed, when we enter the debugger.
         fflush(globals.trace_file);
     }
-    
     
     // 
     // Aggressively, search out all of the loaded modules.
@@ -2262,9 +2337,9 @@ void handle_debugger(struct context *context){
             if(is_call){
                 int success;
                 if(context->use_hypervisor){
-                    success = hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1);
+                    success = hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1, (struct string){0});
                 }else{
-                    success = add_breakpoint(BREAKPOINT_execute, next_rip, 1, BREAKPOINT_FLAG_oneshot);
+                    success = add_breakpoint(BREAKPOINT_execute, next_rip, 1, BREAKPOINT_FLAG_oneshot, (struct string){0});
                 }
                 if(!success) continue;
             }else{
@@ -2316,9 +2391,9 @@ void handle_debugger(struct context *context){
             
             int success;
             if(context->use_hypervisor){
-                success = hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, return_address, 1);
+                success = hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, return_address, 1, (struct string){0});
             }else{
-                success = add_breakpoint(BREAKPOINT_execute, return_address, 1, BREAKPOINT_FLAG_oneshot);
+                success = add_breakpoint(BREAKPOINT_execute, return_address, 1, BREAKPOINT_FLAG_oneshot, (struct string){0});
             }
             
             if(success) break;
@@ -3462,13 +3537,15 @@ void handle_debugger(struct context *context){
                         print(")");
                         
                         if(registers->dr6 & (1ull << breakpoint_index)) print(" [hit]");
-                        if(globals.breakpoints[0].flags & BREAKPOINT_FLAG_oneshot) print(" [one-shot]");
+                        if(globals.breakpoints[breakpoint_index].flags & BREAKPOINT_FLAG_oneshot) print(" [one-shot]");
                         if(type == 0b11) print(" [read]");
                         if(type == 0b01) print(" [write]");
                         
                         if(length == 0b01) print(" [2-byte]");
                         if(length == 0b11) print(" [4-byte]"); // @note: This has some weird swizzle.
                         if(length == 0b10) print(" [8-byte]");
+                        
+                        if(globals.breakpoints[breakpoint_index].condition.data) print("  if %.*s", globals.breakpoints[breakpoint_index].condition.size, globals.breakpoints[breakpoint_index].condition.data);
                     }
                     
                     print("\n");
@@ -3477,7 +3554,7 @@ void handle_debugger(struct context *context){
                 for(int breakpoint_index = 0; breakpoint_index < (int)array_count(globals.breakpoints); breakpoint_index++){
                     if(globals.breakpoints[breakpoint_index].type != BREAKPOINT_none){
                         struct breakpoint breakpoint = globals.breakpoints[breakpoint_index];
-                        char *string  = breakpoint_type_to_string[breakpoint.type];
+                        char *string = breakpoint_type_to_string[breakpoint.type];
                         
                         print("[%x] %c breakpoint at %p(", breakpoint_index, string[0], breakpoint.address);
                         print_symbol(context, breakpoint.address);
@@ -3488,6 +3565,9 @@ void handle_debugger(struct context *context){
                             if(breakpoint.flags & BREAKPOINT_FLAG_oneshot) print("oneshot ");
                             print(")");
                         }
+                        
+                        if(globals.breakpoints[breakpoint_index].condition.data) print("  if %.*s", globals.breakpoints[breakpoint_index].condition.size, globals.breakpoints[breakpoint_index].condition.data);
+                        
                         print("\n");
                     }
                 }

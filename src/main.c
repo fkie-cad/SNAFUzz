@@ -639,6 +639,7 @@ struct globals{
             BREAKPOINT_FLAG_none    = 0,
             BREAKPOINT_FLAG_oneshot = 1,
         } flags;
+        struct string condition;
         u64 address;
         u64 length;
     } breakpoints[0x10]; // Last breakpoint never used, so we can have this be 'BREAKPOINT_none' terminated.
