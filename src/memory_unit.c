@@ -182,6 +182,27 @@ u8 *get_physical_memory_for_write(struct context *context, u64 physical_address)
     return ret;
 }
 
+
+static void write_physical_memory(struct context *context, u64 address, void *data, u64 size){
+    
+    u8 *buffer = data;
+    
+    u64 end_address = address + size;
+    while(address < end_address){
+        u64 page_end = (address + 0x1000) & ~0xfff;
+        u64 end = (end_address < page_end) ? end_address : page_end;
+        u64 size_to_write = end - address;
+        
+        u8 *dest = get_physical_memory_for_write(context, address);
+        memcpy(dest, buffer, size);
+        
+        address += size_to_write;
+        buffer  += size_to_write;
+    }
+}
+
+#define guest_write_physical(type, address, value) write_physical_memory(context, address, &(type){value}, sizeof(type))
+
 //_____________________________________________________________________________________________________________________
 // Extra permissions
 

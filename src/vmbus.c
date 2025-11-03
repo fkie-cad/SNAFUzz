@@ -1079,7 +1079,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 crash_assert(packet_type == /*VM_PKT_DATA_USING_GPA_DIRECT*/9);
                                 
                                 u64 TransferLengthInBytes = TransferLengthInBlocks * globals.disk_info.sector_size_in_bytes;
-                                u8 *Buffer = push_data(&context->scratch_arena, u8, TransferLengthInBytes); // @note: Gets copied in `vhdx_register_tempoary_write`.
+                                u8 *Buffer = push_data(&context->scratch_arena, u8, TransferLengthInBytes); // @note: Gets copied in `disk_register_temporary_write`.
                                 
                                 struct{
                                     u32 reserved;
@@ -1144,14 +1144,11 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 
                                 crash_assert(physical_address < context->physical_memory_size);
                                 
-                                u8 *buffer = get_physical_memory_for_write(context, physical_address);
-                                
                                 u64 lba = (globals.disk_info.virtual_size / 0x200) - 1;
                                 if(lba > 0xffffffff) lba = 0xffffffff;
                                 
-                                *(u32 *)(buffer + 0) = byteswap_u32((u32)lba); // LBA 
-                                *(u32 *)(buffer + 4) = byteswap_u32(0x200);
-                                
+                                guest_write_physical(u32, physical_address + 0, byteswap_u32((u32)lba));
+                                guest_write_physical(u32, physical_address + 4, byteswap_u32(0x200));
                             }break;
                             
                             case 0xa0:{ // REPORT LUNS
@@ -1174,22 +1171,20 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 
                                 crash_assert(physical_address < context->physical_memory_size);
                                 
-                                u8 *buffer = get_physical_memory_for_write(context, physical_address);
-                                
-                                crash_assert(((physical_address + allocation_length - 1) & ~0xfff) == (physical_address & ~0xfff));
                                 crash_assert(allocation_length >= 0x10);
                                 
                                 if(vm_scsi_command->target_id == 0 && vm_scsi_command->path_id == 0){
                                     // 
                                     // @note: We only have one LUN (the vhdx). 
                                     // 
-                                    *(u32 *)(buffer + 0) = byteswap_u32(0x8); // LUN LIST LENGTH (in bytes)
-                                    *(u32 *)(buffer + 4) = 0; // Reserved
-                                    *(u64 *)(buffer + 8) = 0; // LUN 0.
+                                    
+                                    guest_write_physical(u32, physical_address + 0, byteswap_u32(0x8));  // LUN LIST LENGTH (in bytes)
+                                    guest_write_physical(u32, physical_address + 4, 0); // Reserved
+                                    guest_write_physical(u64, physical_address + 4, 0); // LUN 0.
                                 }else{
-                                    *(u32 *)(buffer + 0) = byteswap_u32(0); // LUN LIST LENGTH (in bytes)
-                                    *(u32 *)(buffer + 4) = 0; // Reserved
-                                    *(u64 *)(buffer + 8) = 0; // LUN 0.
+                                    guest_write_physical(u32, physical_address + 0, byteswap_u32(0));  // LUN LIST LENGTH (in bytes)
+                                    guest_write_physical(u32, physical_address + 4, 0); // Reserved
+                                    guest_write_physical(u64, physical_address + 4, 0); // LUN 0.
                                 }
                             }break;
                             
@@ -1213,20 +1208,19 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 u64 physical_address = (gpa_descriptor->PageFrameNumber * 0x1000) + gpa_descriptor->Offset;
                                 
                                 crash_assert(physical_address < context->physical_memory_size);
-                                crash_assert(((physical_address + allocation_length) & ~0xfff) == (physical_address & ~0xfff));
                                 
-                                u8 *buffer = get_physical_memory_for_write(context, physical_address);
+                                u8 *buffer = push_data(&context->scratch_arena, u8, allocation_length);
                                 
                                 if(!enable_vital_product_data){
                                     
                                     crash_assert(allocation_length >= 0x24);
                                     
-                                    memset(buffer, 0, allocation_length);
                                     buffer[2] = 5; // Version
                                     buffer[3] = 2; // Response data format
                                     buffer[4] = 0x1f; // additional length
                                     buffer[7] = 2; // cmdque
                                     memcpy(buffer + 8, "Msft    Virtual Disk    1.0 ", 0x1c);
+                                    
                                 }else{
                                     switch(page_code){
                                         case 0:{
@@ -1330,6 +1324,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     }
                                 }
                                 
+                                write_physical_memory(context, physical_address, buffer, allocation_length);
                             }break;
                             
                             case 0x1a:{ // MODE SENSE (6)
@@ -1351,9 +1346,8 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 u64 physical_address = (gpa_descriptor->PageFrameNumber * 0x1000) + gpa_descriptor->Offset;
                                 
                                 crash_assert(physical_address < context->physical_memory_size);
-                                crash_assert(((physical_address + allocation_length) & ~0xfff) == (physical_address & ~0xfff));
                                 
-                                u8 *buffer = get_physical_memory_for_write(context, physical_address);
+                                u8 *buffer = push_data(&context->scratch_arena, u8, allocation_length);
                                 
                                 if(page_code == /*MODE_PAGE_CONTROL*/0xa && subpage_code == 0){
                                     vstor_packet->status = 0xc0000001;
@@ -1402,6 +1396,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                     set_crash_information(context, CRASH_internal_error, (u64)"Unhandled mode sense.");
                                 }
                                 
+                                write_physical_memory(context, physical_address, buffer, allocation_length);
                             }break;
                             
                             case 0x9e:{ // SERVICE ACTION IN (16)
@@ -1422,10 +1417,10 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 } *gpa_descriptor = (void *)(vmbus_packet + 1);
                                 
                                 u64 physical_address = (gpa_descriptor->PageFrameNumber * 0x1000) + gpa_descriptor->Offset;
-                                crash_assert(((physical_address + allocation_length) & ~0xfff) == (physical_address & ~0xfff));
+                                
                                 crash_assert(physical_address < context->physical_memory_size);
                                 
-                                u8 *buffer = get_physical_memory_for_write(context, physical_address);
+                                u8 *buffer = push_data(&context->scratch_arena, u8, allocation_length);
                                 
                                 switch(service_action){
                                     case 0x10:{ // READ CAPACITY (16)
@@ -1448,6 +1443,8 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                         set_crash_information(context, CRASH_internal_error, (u64)"Unhandled service action.");
                                     }break;
                                 }
+                                
+                                write_physical_memory(context, physical_address, buffer, allocation_length);
                             }break;
                             
                             default:{
