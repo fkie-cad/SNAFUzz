@@ -4747,6 +4747,71 @@ void handle_debugger(struct context *context){
             continue;
         }
         
+        if(string_match(command, string("segment_heap"))){
+            int error = 0;
+            u64 segment_heap = parse_address(context, &line, &error);
+            if(error) continue;
+            
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, segment_heap, /*print cr3*/true);
+            
+            u32 signature = guest_read(u32, segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.Signature")));
+            if(signature != 0xddeeddee){
+                print("Error: Address %p is not a _SEGMENT_HEAP signature is 0x%x, expected 0xddeeddee.\n", segment_heap, signature);
+                continue;
+            }
+            
+            u64 SegContext0 = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[0]"));
+            u64 SegContext1 = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[1]"));
+            
+            // u64 Seg0MaxAllocationSize = guest_read(u64);
+            
+            // RtlpHpHeapGlobals
+            // SegContexts[0]
+            // SegContexts[1]
+            // VsContext
+            // LfhContext
+            
+            u64 LfhContext = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.LfhContext"));
+            u16 LfhMaxBlockSize = guest_read(u16, segment_heap + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Config.Global.MaxBlockSize")));
+            u64 LfhBuckets = LfhContext + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Buckets"));
+            
+            print("LFH:\n");
+            print("    MaxBlockSize = %x\n", LfhMaxBlockSize);
+            
+            for(u32 index = 0; index < 128; index ++){
+                u64 Bucket = guest_read(u64, LfhBuckets + index * 8);
+                if((Bucket & 1) == 1) continue;
+                
+                print("    [%u] %p\n", index, Bucket);
+                
+                u64 AvailableSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.AvailableSubsegmentList"));
+                u64 AvailableSubsegment = guest_read(u64, AvailableSubsegmentList);
+                if(AvailableSubsegment != AvailableSubsegmentList){
+                    print("    Available Subsegments:\n");
+                    do{
+                        print("         %p\n", AvailableSubsegment);
+                        
+                        
+                        AvailableSubsegment = guest_read(u64, AvailableSubsegment);
+                    }while(AvailableSubsegmentList != AvailableSubsegment && !context->crash);
+                }
+                
+                u64 FullSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.FullSubsegmentList"));
+                u64 FullSubsegment = guest_read(u64, FullSubsegmentList);
+                if(FullSubsegment != FullSubsegmentList){
+                    print("    Full Subsegments:\n");
+                    do{
+                        print("         %p\n", FullSubsegment);
+                        FullSubsegment = guest_read(u64, FullSubsegment);
+                    }while(FullSubsegmentList != FullSubsegment && !context->crash);
+                }
+            }
+            
+            u64 VsContext = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.VsContext"));
+            
+            context->registers.cr3 = cr3;
+            continue;
+        }
         print("Unknown command '%.*s'. See 'help' for list of commands.\n", command.size, command.data);
         
     } // while(true)
