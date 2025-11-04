@@ -1221,6 +1221,191 @@ struct codeview_record_header *pdb_get_record_for_type_index(struct pdb_context 
 
 
 // returns the size of the type
+static u64 pdb_sizeof_type(struct pdb_context *pdb_context, u32 type_index){
+    
+    if(type_index < 0x1000){
+        
+        //
+        // Handle "basic" type indices.
+        //
+        
+        switch(type_index){
+            case    0: return 0;
+            case  0x3: return 0;
+            
+            case 0x10: return 1;
+            
+            case 0x11: return 2;
+            
+            case 0x12: return 4;
+            
+            case 0x13: return 8;
+            
+            case 0x20: return 1;
+            case 0x21: return 2;
+            case 0x22: return 4;
+            case 0x23: return 8;
+            
+            case 0x68: return 1;
+            case 0x69: return 2;
+            
+            case 0x70: return 1;
+            
+            case 0x71: return 2;
+            
+            case 0x72: return 2;
+            case 0x73: return 2;
+            case 0x74: return 4;
+            case 0x75: return 4;
+            case 0x76: return 8;
+            case 0x77: return 8;
+            
+            case 0x40: return 4;
+            case 0x41: return 8;
+            
+            
+            case 0x620: return 8;
+            case 0x670: return 8;
+            case 0x671: return 8;
+            
+            case 0x668: return 8;
+            case 0x669: return 8;
+            
+            case 0x603: return 8;
+            
+            default: print("Unhandled type index 0x%x", type_index); return 0;
+        }
+        
+        return 0;
+    }
+    
+    struct codeview_record_header *record = pdb_get_record_for_type_index(pdb_context, type_index);
+    if(!record){
+        print("ERROR_INVALID_TYPE_INDEX\n");
+        return 0;
+    }
+    
+    if(record->kind == /*LF_POINTER*/0x1002) return 8;
+    
+    
+    while(record->kind == /*LF_MODIFIER*/0x1001){
+        
+        type_index = *(u32 *)(record + 1);
+        
+        if(type_index < 0x1000) break;
+        
+        record = pdb_get_record_for_type_index(pdb_context, type_index);
+        if(!record){
+            print("ERROR_INVALID_TYPE_INDEX 0x%x\n", type_index);
+            return 0;
+        }
+    }
+    
+    if(type_index < 0x1000) return pdb_sizeof_type(pdb_context, type_index);
+    
+    struct pdb_stream type_stream = {
+        .base = (void *)(record + 1),
+        .size = record->length - 2,
+    };
+    
+    int error = 0;
+    
+    switch(record->kind){
+        
+        case /*LF_ARRAY*/0x1503:{
+            
+            pdb_read_type__failable(&type_stream, u32, &error);
+            pdb_read_type__failable(&type_stream, u32, &error);
+            
+            return pdb_read_numeric_leaf_as_u64(&type_stream, &error);
+        }break;
+        
+        //
+        // @copy_and_paste from 'load_pdb'.
+        //
+        case 0x1506:  // LF_UNION
+        case 0x1609:  // LF_STRUCTURE_EX
+        case 0x1505:{ // LF_STRUCTURE
+            
+            // LF_UNION
+            //     u16 number_of_elements;
+            //     u16 properties;
+            //     u32 field_list_type_index;
+            
+            // LF_STRUCTURE_EX
+            //     u32 properties;
+            //     u32 field_list_type_index;
+            //     u32 derived;
+            //     u32 vshape;
+            
+            // LF_STRUCTURE
+            //     u16 number_of_elements;
+            //     u16 properties;
+            //     u32 field_list_type_index;
+            //     u32 derived;
+            //     u32 vshape;
+            
+            //
+            // All of them are followed by a numeric leaf for the size of the structure/union and its name.
+            //
+            
+            u32 properties_and_number_of_elements = pdb_read_type__failable(&type_stream, u32, &error);
+            u32 properties = (record->kind == /*LF_STRUCTURE_EX*/0x1609) ? properties_and_number_of_elements : (properties_and_number_of_elements >> 16);
+            type_stream.current_offset += (record->kind == /*LF_UNION*/0x1506) ? 4 : 12;
+            
+            u64 struct_size = pdb_read_numeric_leaf_as_u64(&type_stream, &error);
+            struct string name = pdb_read_zero_terminated_string(&type_stream);
+            
+            if(properties & /* forward ref */(1 << 7)){
+                // If this is a forward ref, the struct size is 0.
+                // Hence we get the correct struct size by looking up the entry.
+                struct pdb_hash_table_entry *table_entry = pdb_hash_table_get(&pdb_context->type_table, name);
+                if(table_entry){
+                    
+                    struct codeview_record_header *real_record = table_entry->record;
+                    
+                    type_stream = (struct pdb_stream){
+                        .base = (void *)(real_record + 1),
+                        .size = real_record->length - 2,
+                    };
+                    
+                    type_stream.current_offset += (record->kind == /*LF_UNION*/0x1506) ? 8 : 16;
+                    
+                    struct_size = pdb_read_numeric_leaf_as_u64(&type_stream, &error);
+                }
+            }
+            
+            return struct_size;
+        }break;
+        
+        case 0x1205:{ // LF_BITFIELD
+            u32 underlying_type = pdb_read_type__failable(&type_stream, u32, &error);
+            
+            return pdb_sizeof_type(pdb_context, underlying_type);
+        }break;
+        
+        case 0x1507:{ // LF_ENUM
+            u16 count = pdb_read_type__failable(&type_stream, u16, &error);
+            u16 properties = pdb_read_type__failable(&type_stream, u16, &error);
+            (void)count;
+            (void)properties;
+            
+            
+            u32 underlying_type_index = pdb_read_type__failable(&type_stream, u32, &error);
+            
+            return pdb_sizeof_type(pdb_context, underlying_type_index);
+        }break;
+        
+        
+        default: print("UNHANDLED_TYPE_0x%x", record->kind); break;
+        
+    }
+    
+    return 0;
+}
+
+
+// returns the size of the type
 static smm pdb_print_type(struct context *context, struct pdb_context *pdb_context, u32 type_index, u64 address, int have_address){
     
     smm size = 0;
@@ -1631,6 +1816,7 @@ static smm pdb_print_type(struct context *context, struct pdb_context *pdb_conte
                 }
             }
             
+            size = underlying_type_size;
         }break;
         
         
@@ -1880,7 +2066,7 @@ u64 pdb_get_member_offset(struct pdb_context *pdb_context, struct string type_na
         struct string member = member_string;
         
         for(smm index = 0; index < member_string.size; index++){
-            if(member_string.data[index] == '.'){
+            if(member_string.data[index] == '.' || member_string.data[index] == '['){
                 member.size = index;
                 member_string.size -= index;
                 member_string.data += index;
@@ -1937,6 +2123,83 @@ u64 pdb_get_member_offset(struct pdb_context *pdb_context, struct string type_na
                 print("field %.*s has invalid type index.\n", member.size, member.data);
                 *error = 1;
                 return 0;
+            }
+            
+            while(field_type->kind == /*LF_MODIFIER*/0x1001){
+                u32 type_index = *(u32 *)(field_type + 1);
+                field_type = pdb_get_record_for_type_index(pdb_context, type_index);
+                if(field_type){
+                    print("Field '%.*s' has invalid type index.\n", member.size, member.data);
+                    *error = 1;
+                    return 0;
+                }
+            }
+            
+            if(field_type->kind == /*LF_ARRAY*/0x1503 && member_string.size){
+                
+                if(member_string.data[0] != '['){
+                    print("member '%.*s'is array expected '['\n", member_string.size, member_string.data);
+                    *error = 1;
+                    return 0;
+                }
+                
+                struct pdb_stream array_stream = {
+                    .base = (void *)(field_type + 1),
+                    .size = field_type->length - 2,
+                };
+                
+                u32 element_type = pdb_read_type__failable(&array_stream, u32, error);
+                /*u32 index_type = */pdb_read_type__failable(&array_stream, u32, error);
+                u64 array_size = pdb_read_numeric_leaf_as_u64(&array_stream, error);
+                
+                smm element_type_size = pdb_sizeof_type(pdb_context, element_type);
+                
+                if(*error){
+                    print("Failed to read array type 0x%x for member string '%.*s'.\n", member_string.size, member_string.data);
+                    return 0;
+                }
+                
+                member_string.size -= 1;
+                member_string.data += 1;
+                
+                struct string index_string = {
+                    .data = member_string.data
+                        };
+                
+                for(smm index = 0; index < member_string.size; index++){
+                    if(member_string.data[index] == ']'){
+                        index_string.size = index;
+                        member_string.size -= index + 1;
+                        member_string.data += index + 1;
+                        break;
+                    }
+                }
+                
+                if(index_string.size == 0){
+                    print("failed to parse index for member_string '%.*s'\n", member_string.size + 1, member_string.data - 1);
+                    *error = 1;
+                    return 0;
+                }
+                
+                u64 index = parse_number(index_string, error);
+                if(*error){
+                    print("Failed to parse index string '%.*s'\n", index_string.size, index_string.data);
+                    return 0;
+                }
+                
+                if(!element_type_size){
+                    print("Failed to get size for array element type.\n");
+                    *error = 1;
+                    return 0;
+                }
+                
+                if(array_size / element_type_size <= index){
+                    print("Warning: index 0x%llx is out of bounds of the structure, array has size 0x%llx.\n", index, array_size / element_type_size);
+                }
+                
+                root_offset += index * element_type_size;
+                
+                field_type = pdb_get_record_for_type_index(pdb_context, element_type);
             }
             
             if(field_type->kind == /*LF_STRUCTURE*/0x1505 || field_type->kind == /*LF_STRUCTURE_EX*/0x1609 || field_type->kind == /*LF_UNION*/0x1506){
