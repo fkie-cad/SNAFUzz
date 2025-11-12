@@ -1397,7 +1397,7 @@ void print_stack_trace(struct context *context){
     
     for(int vtl = context->registers.vtl_state.current_vtl; vtl >= 0; vtl -= 1){ 
         
-        while(!context->crash){
+        for(u32 depth = 0; depth < 0x200 && !context->crash; depth++){
             
             struct loaded_module *module = get_module_for_address(registers.rip);
             
@@ -1451,7 +1451,7 @@ u64 calculate_stack_trace_hash(struct context *context){
         registers.rsp += 8;
     }
     
-    while(!context->crash){
+    for(u32 depth = 0; depth < 0x200 && !context->crash; depth++){
         
         struct loaded_module *module = get_module_for_address(registers.rip);
         
