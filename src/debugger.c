@@ -361,12 +361,21 @@ u64 get_address_of_next_instruction(struct context *context, struct registers *r
         // sysret
         case 0x107: next_rip = registers->rcx; break;
         
-        case 0x130:
-        case 0x132:{
+        case 0x130: case 0x132:{
             if(globals.cpu_vendor == VENDOR_AMD){
                 // As far as I can tell, this causes the problem where we cannot single step wrmsr instructions, but not sure.
                 prefetch_instruction(context, next_rip, instruction_buffer, sizeof(instruction_buffer));
                 goto try_again_because_microsoft_sometimes_does_not_clear_RF_after_emulating_on_amd;
+            }
+        }break;
+        
+        case 0x101:{
+            switch(decoded_instruction.modrm){
+                case 0xd9: case 0xc1:{
+                    if(registers->rcx == 0x11){
+                        next_rip = registers->vtl_state.rip;
+                    }
+                }break;
             }
         }break;
         
