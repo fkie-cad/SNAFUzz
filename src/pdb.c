@@ -1869,7 +1869,7 @@ void pdb_dump_type(struct context *context, struct pdb_context *pdb_context, str
         struct string member = member_string;
         
         for(smm index = 0; index < member_string.size; index++){
-            if(member_string.data[index] == '.'){
+            if(member_string.data[index] == '.' || member_string.data[index] == '['){
                 member.size = index;
                 member_string.size -= index;
                 member_string.data += index;
@@ -1922,6 +1922,71 @@ void pdb_dump_type(struct context *context, struct pdb_context *pdb_context, str
                     return;
                 }
             }
+            
+            if(field_type->kind == /*LF_ARRAY*/0x1503 && member_string.size){
+                
+                if(member_string.data[0] != '['){
+                    print("member '%.*s'is array expected '['\n", member_string.size, member_string.data);
+                    return;
+                }
+                
+                struct pdb_stream array_stream = {
+                    .base = (void *)(field_type + 1),
+                    .size = field_type->length - 2,
+                };
+                
+                u32 element_type = pdb_read_type__failable(&array_stream, u32, &error);
+                /*u32 index_type = */pdb_read_type__failable(&array_stream, u32, &error);
+                u64 array_size = pdb_read_numeric_leaf_as_u64(&array_stream, &error);
+                
+                smm element_type_size = pdb_sizeof_type(pdb_context, element_type);
+                
+                if(error){
+                    print("Failed to read array type 0x%x for member string '%.*s'.\n", member_string.size, member_string.data);
+                    return;
+                }
+                
+                member_string.size -= 1;
+                member_string.data += 1;
+                
+                struct string index_string = {
+                    .data = member_string.data,
+                };
+                
+                for(smm index = 0; index < member_string.size; index++){
+                    if(member_string.data[index] == ']'){
+                        index_string.size = index;
+                        member_string.size -= index + 1;
+                        member_string.data += index + 1;
+                        break;
+                    }
+                }
+                
+                if(index_string.size == 0){
+                    print("failed to parse index for member_string '%.*s'\n", member_string.size + 1, member_string.data - 1);
+                    return;
+                }
+                
+                u64 index = parse_number(index_string, &error);
+                if(error){
+                    print("Failed to parse index string '%.*s'\n", index_string.size, index_string.data);
+                    return;
+                }
+                
+                if(!element_type_size){
+                    print("Failed to get size for array element type.\n");
+                    return;
+                }
+                
+                if(array_size / element_type_size <= index){
+                    print("Warning: index 0x%llx is out of bounds of the structure, array has size 0x%llx.\n", index, array_size / element_type_size);
+                }
+                
+                root_offset += index * element_type_size;
+                field_type = pdb_get_record_for_type_index(pdb_context, element_type);
+                member_type_index = element_type;
+            }
+            
             
             if(field_type->kind == /*LF_STRUCTURE*/0x1505 || field_type->kind == /*LF_STRUCTURE_EX*/0x1609 || field_type->kind == /*LF_UNION*/0x1506){
                 
@@ -2198,8 +2263,8 @@ u64 pdb_get_member_offset(struct pdb_context *pdb_context, struct string type_na
                 }
                 
                 root_offset += index * element_type_size;
-                
                 field_type = pdb_get_record_for_type_index(pdb_context, element_type);
+                member_type_index = element_type;
             }
             
             if(field_type->kind == /*LF_STRUCTURE*/0x1505 || field_type->kind == /*LF_STRUCTURE_EX*/0x1609 || field_type->kind == /*LF_UNION*/0x1506){
