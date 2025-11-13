@@ -3733,36 +3733,38 @@ void handle_debugger(struct context *context){
                 continue;
             }
             
+            u64 physical_address = 0;
+            
             if(p3_entry & PAGE_TABLE_large_page){
-                u64 physical_address = (p3_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + (p2_table_index << 21) + (p1_table_index << 12) + offset_in_page;
+                physical_address = (p3_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + (p2_table_index << 21) + (p1_table_index << 12) + offset_in_page;
                 print("  --> Large Page at %p\n", physical_address);
-                continue;
+            }else{
+                
+                u64 p2_table_offset = p3_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK;
+                u64 p2_entry = read_page_table_entry(context, p2_table_offset + 8 * p2_table_index);
+                print("P2 Table (%p) Entry %4d: %llx (r%s%s)\n", p2_table_offset, p2_table_index, p2_entry, (p2_entry & PAGE_TABLE_writable) ? "w" : "", (p2_entry & PAGE_TABLE_execute_disable) ? "" : "x");
+                if(!(p2_entry & PAGE_TABLE_present)){
+                    print("  --> P2 entry is not present\n");
+                    continue;
+                }
+                
+                if(p2_entry & PAGE_TABLE_large_page){
+                    physical_address = (p2_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + (p1_table_index << 12) + offset_in_page;
+                    print("  --> Large Page at %p\n", physical_address);
+                }else{
+                    
+                    u64 p1_table_offset = p2_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK;
+                    u64 p1_entry = read_page_table_entry(context, p1_table_offset + 8 * p1_table_index);
+                    print("P1 Table (%p) Entry %4d: %llx (r%s%s)\n", p1_table_offset, p1_table_index, p1_entry, (p1_entry & PAGE_TABLE_writable) ? "w" : "", (p1_entry & PAGE_TABLE_execute_disable) ? "" : "x");
+                    if(!(p1_entry & PAGE_TABLE_present)){
+                        print("  --> P1 entry is not present\n");
+                        continue;
+                    }
+                    
+                    physical_address = (p1_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + offset_in_page;
+                    print("  --> Page is at %p\n", physical_address);
+                }
             }
-            
-            u64 p2_table_offset = p3_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK;
-            u64 p2_entry = read_page_table_entry(context, p2_table_offset + 8 * p2_table_index);
-            print("P2 Table (%p) Entry %4d: %llx (r%s%s)\n", p2_table_offset, p2_table_index, p2_entry, (p2_entry & PAGE_TABLE_writable) ? "w" : "", (p2_entry & PAGE_TABLE_execute_disable) ? "" : "x");
-            if(!(p2_entry & PAGE_TABLE_present)){
-                print("  --> P2 entry is not present\n");
-                continue;
-            }
-            
-            if(p2_entry & PAGE_TABLE_large_page){
-                u64 physical_address = (p2_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + (p1_table_index << 12) + offset_in_page;
-                print("  --> Large Page at %p\n", physical_address);
-                continue;
-            }
-            
-            u64 p1_table_offset = p2_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK;
-            u64 p1_entry = read_page_table_entry(context, p1_table_offset + 8 * p1_table_index);
-            print("P1 Table (%p) Entry %4d: %llx (r%s%s)\n", p1_table_offset, p1_table_index, p1_entry, (p1_entry & PAGE_TABLE_writable) ? "w" : "", (p1_entry & PAGE_TABLE_execute_disable) ? "" : "x");
-            if(!(p1_entry & PAGE_TABLE_present)){
-                print("  --> P1 entry is not present\n");
-                continue;
-            }
-            
-            u64 physical_address = (p1_entry & PAGE_TABLE_ENTRY_ADDRESS_MASK) + offset_in_page;
-            print("  --> Page is at %p\n", physical_address);
             
             if(context->vtl0_permissions){
                 u64 page_index = physical_address >> 12;
