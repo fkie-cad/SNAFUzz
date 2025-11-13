@@ -2144,6 +2144,30 @@ void KiKernelSysretExit_brocess_hook(struct context *context, struct registers *
     }
 }
 
+struct debugger_jit_call_context{
+    struct registers registers;
+    int debug_depth;
+    s64 fuzz_case_timeout;
+    int use_hypervisor;
+};
+
+static void prepare_debugger_jit_call(struct context *context, struct debugger_jit_call_context *jit_call){
+    jit_call->registers         = context->registers;
+    jit_call->debug_depth       = context->skip_setting_permission_bits;
+    jit_call->fuzz_case_timeout = context->fuzz_case_timeout;
+    jit_call->use_hypervisor    = context->use_hypervisor;
+    
+    context->skip_setting_permission_bits = 0;
+    context->fuzz_case_timeout = 0x7fffffffffffffff;
+    context->use_hypervisor = 0;
+}
+
+static void postpare_debugger_jit_call(struct context *context, struct debugger_jit_call_context *jit_call){
+    context->registers                    = jit_call->registers;
+    context->skip_setting_permission_bits = jit_call->debug_depth;
+    context->fuzz_case_timeout            = jit_call->fuzz_case_timeout;
+    context->use_hypervisor               = jit_call->use_hypervisor;
+}
 
 void handle_debugger(struct context *context){
     
@@ -2232,6 +2256,8 @@ void handle_debugger(struct context *context){
     print("\n");
     
     context->scratch_arena.current = context->scratch_arena.base; // Reset the `scratch_arena`.
+    
+    struct debugger_jit_call_context debugger_jit_call_context;
     
     snapshot_mode_currently_in_debugger = true; // @note: We set this while in the debugger, so that we can CTRL-C.
     
@@ -4058,23 +4084,12 @@ void handle_debugger(struct context *context){
             
             void lock_userspace_module_memory(struct context *context);
             
-            struct registers save = context->registers;
-            
-            int depth = context->skip_setting_permission_bits;
-            s64 fuzz_case_timeout = context->fuzz_case_timeout;
-            int use_hypervisor = context->use_hypervisor;
-            
-            context->skip_setting_permission_bits = 0;
-            context->fuzz_case_timeout = 0x7fffffffffffffff;
-            context->use_hypervisor = 0;
+            prepare_debugger_jit_call(context, &debugger_jit_call_context);
             
             lock_userspace_module_memory(context);
             
-            context->skip_setting_permission_bits = depth;
-            context->fuzz_case_timeout = fuzz_case_timeout;
-            context->use_hypervisor = use_hypervisor;
+            postpare_debugger_jit_call(context, &debugger_jit_call_context);
             
-            context->registers = save;
             continue;
         }
         
@@ -4758,71 +4773,135 @@ void handle_debugger(struct context *context){
             continue;
         }
         
-        if(string_match(command, string("segment_heap"))){
-            int error = 0;
-            u64 segment_heap = parse_address(context, &line, &error);
-            if(error) continue;
+        if(string_match(command, string("pools"))){
             
-            u64 cr3 = patch_in_cr3_for_virtual_address(context, segment_heap, /*print cr3*/true);
+            u64 ExPoolState = get_symbol(context, string("nt!ExPoolState"));
             
-            u32 signature = guest_read(u32, segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.Signature")));
-            if(signature != 0xddeeddee){
-                print("Error: Address %p is not a _SEGMENT_HEAP signature is 0x%x, expected 0xddeeddee.\n", segment_heap, signature);
-                continue;
-            }
+            u64 cr3 = patch_in_cr3_for_virtual_address(context, ExPoolState, /*print cr3*/true);
             
-            u64 SegContext0 = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[0]"));
-            u64 SegContext1 = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[1]"));
+            u32 NumberOfPools = guest_read(u32, ExPoolState + get_member_offset(context, string("nt!_EX_POOL_HEAP_MANAGER_STATE.NumberOfPools")));
             
-            // u64 Seg0MaxAllocationSize = guest_read(u64);
+
+            print("PoolState at %p Number of Pools %u\n", ExPoolState, NumberOfPools);
+
+            u64 PoolNodes = ExPoolState + get_member_offset(context, string("nt!_EX_POOL_HEAP_MANAGER_STATE.PoolNode"));
             
-            // RtlpHpHeapGlobals
-            // SegContexts[0]
-            // SegContexts[1]
-            // VsContext
-            // LfhContext
+            // @cleanup: Dumb hack... Have a size thing.
+            u64 PoolNodeSize = get_member_offset(context, string("nt!_EX_POOL_HEAP_MANAGER_STATE.PoolNode[1]")) - get_member_offset(context, string("nt!_EX_POOL_HEAP_MANAGER_STATE.PoolNode[0]")); 
             
-            u64 LfhContext = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.LfhContext"));
-            u16 LfhMaxBlockSize = guest_read(u16, segment_heap + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Config.Global.MaxBlockSize")));
-            u64 LfhBuckets = LfhContext + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Buckets"));
-            
-            print("LFH:\n");
-            print("    MaxBlockSize = %x\n", LfhMaxBlockSize);
-            
-            for(u32 index = 0; index < 128; index ++){
-                u64 Bucket = guest_read(u64, LfhBuckets + index * 8);
-                if((Bucket & 1) == 1) continue;
+            for(u32 PoolIndex = 0; PoolIndex < NumberOfPools; PoolIndex++){
+                print("Pool %u:\n", PoolIndex);
+                u64 PoolNode = PoolNodes + PoolNodeSize * PoolIndex;
                 
-                print("    [%u] %p\n", index, Bucket);
-                
-                u64 AvailableSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.AvailableSubsegmentList"));
-                u64 AvailableSubsegment = guest_read(u64, AvailableSubsegmentList);
-                if(AvailableSubsegment != AvailableSubsegmentList){
-                    print("    Available Subsegments:\n");
-                    do{
-                        print("         %p\n", AvailableSubsegment);
+                for(u32 HeapIndex = 0; HeapIndex < 4; HeapIndex++){
+                    u64 SegmentHeap = guest_read(u64, PoolNode + get_member_offset(context, string("nt!_EX_HEAP_POOL_NODE.Heaps")) + 8 * HeapIndex);
+                    if(!SegmentHeap) continue;
+                    
+                    static char *HeapName[] = {
+                        "NonPagedPool",
+                        "NonPagedPoolNx",
+                        "PagedPool",
+                        "ReservedPool",
+                    };
+                    
+                    print("    [%u] Heap %p (%s)\n", HeapIndex, SegmentHeap, HeapName[HeapIndex]);
+                    
+                    u32 signature = guest_read(u32, SegmentHeap + get_member_offset(context, string("nt!_SEGMENT_HEAP.Signature")));
+                    if(signature != 0xddeeddee){
+                        print("Error: Address %p is not a _SEGMENT_HEAP signature is 0x%x, expected 0xddeeddee.\n", SegmentHeap, signature);
+                        continue;
+                    }
+                    
+                    // u64 SegContext0 = SegmentHeap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[0]"));
+                    // u64 SegContext1 = SegmentHeap + get_member_offset(context, string("nt!_SEGMENT_HEAP.SegContexts[1]"));
+                    
+                    // u64 Seg0MaxAllocationSize = guest_read(u64);
+                    
+                    // RtlpHpHeapGlobals
+                    // SegContexts[0]
+                    // SegContexts[1]
+                    // VsContext
+                    // LfhContext
+                    
+                    u64 LfhContext = SegmentHeap + get_member_offset(context, string("nt!_SEGMENT_HEAP.LfhContext"));
+                    u16 LfhMaxBlockSize = guest_read(u16, SegmentHeap + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Config.Global.MaxBlockSize")));
+                    u64 LfhBuckets = LfhContext + get_member_offset(context, string("nt!_HEAP_LFH_CONTEXT.Buckets"));
+                    
+                    print("LFH:\n");
+                    print("    MaxBlockSize = %x\n", LfhMaxBlockSize);
+                    
+                    for(u32 BucketIndex = 0; BucketIndex < 128; BucketIndex++){
+                        u64 Bucket = guest_read(u64, LfhBuckets + BucketIndex * 8);
+                        if((Bucket & 1) == 1) continue;
                         
+                        print("    [%u] %p\n", BucketIndex, Bucket);
                         
-                        AvailableSubsegment = guest_read(u64, AvailableSubsegment);
-                    }while(AvailableSubsegmentList != AvailableSubsegment && !context->crash);
-                }
-                
-                u64 FullSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.FullSubsegmentList"));
-                u64 FullSubsegment = guest_read(u64, FullSubsegmentList);
-                if(FullSubsegment != FullSubsegmentList){
-                    print("    Full Subsegments:\n");
-                    do{
-                        print("         %p\n", FullSubsegment);
-                        FullSubsegment = guest_read(u64, FullSubsegment);
-                    }while(FullSubsegmentList != FullSubsegment && !context->crash);
+                        u64 AvailableSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.AvailableSubsegmentList"));
+                        u64 AvailableSubsegment = guest_read(u64, AvailableSubsegmentList);
+                        if(AvailableSubsegment != AvailableSubsegmentList){
+                            print("    Available Subsegments:\n");
+                            do{
+                                print("         %p\n", AvailableSubsegment);
+                                
+                                
+                                AvailableSubsegment = guest_read(u64, AvailableSubsegment);
+                            }while(AvailableSubsegmentList != AvailableSubsegment && !context->crash);
+                        }
+                        
+                        u64 FullSubsegmentList = Bucket + get_member_offset(context, string("nt!_HEAP_LFH_BUCKET.State.FullSubsegmentList"));
+                        u64 FullSubsegment = guest_read(u64, FullSubsegmentList);
+                        if(FullSubsegment != FullSubsegmentList){
+                            print("    Full Subsegments:\n");
+                            do{
+                                print("         %p\n", FullSubsegment);
+                                FullSubsegment = guest_read(u64, FullSubsegment);
+                            }while(FullSubsegmentList != FullSubsegment && !context->crash);
+                        }
+                    }
+                    
+                    // u64 VsContext = SegmentHeap + get_member_offset(context, string("nt!_SEGMENT_HEAP.VsContext"));
+                    
                 }
             }
-            
-            u64 VsContext = segment_heap + get_member_offset(context, string("nt!_SEGMENT_HEAP.VsContext"));
             
             context->registers.cr3 = cr3;
             continue;
         }
+        
+        if(string_match(command, string("virtual_for_physical"))){
+            
+            u64 Physical = 0;
+            if(line.size){
+                int error = 0;
+                Physical = parse_address(context, &line, &error);
+                if(error) continue;
+                
+                print("PhysicalAddress: %p\n", Physical);
+            }else{
+                print("Expected guest physical Physical\n");
+                continue;
+            }
+            
+            
+            prepare_debugger_jit_call(context, &debugger_jit_call_context);
+            
+            context->registers.rsp -= 0x10;
+            guest_write(u64, context->registers.rsp, DEFAULT_RETURN_RIP);
+            context->registers.rip = get_symbol(context, string("nt!MmGetVirtualForPhysical"));
+            context->registers.rcx = Physical;
+            
+            start_execution_jit(context);
+            
+            u64 Virtual = context->registers.rax;
+            
+            print_result_status(context, "MmGetVirtualForPhysical");
+            
+            postpare_debugger_jit_call(context, &debugger_jit_call_context);
+            
+            print("VirtualAddress: %p\n", Virtual);
+            continue;
+        }
+        
         print("Unknown command '%.*s'. See 'help' for list of commands.\n", command.size, command.data);
         
     } // while(true)
