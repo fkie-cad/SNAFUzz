@@ -301,7 +301,7 @@ int parse_dmp(struct context *context, char *file_name){
     }
     
 #if _WIN32
-    int SetFilePointerSuccess = SetFilePointerEx(FileHandle, 0x2000, NULL, 0);
+    int SetFilePointerSuccess = SetFilePointerEx(FileHandle, 0x2000, NULL, /*FILE_BEGIN*/0);
     if(!SetFilePointerSuccess){
         print("Error: Could not 'SetFilePointerEx' to 0x2000 (GetLastError %d).\n", GetLastError());
         return 0;

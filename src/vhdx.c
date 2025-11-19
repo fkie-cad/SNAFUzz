@@ -189,7 +189,6 @@ static int parse_vhdx(char *file_name, HANDLE *file_handle){
 static u8 *vhdx_read_sectors(struct memory_arena *arena, u64 TotalSectorsToRead, u64 Sector){
     u64 TotalBytesToRead = TotalSectorsToRead * globals.disk_info.sector_size_in_bytes;
     u8 *ret = push_data(arena, u8, TotalBytesToRead);
-    if(!ret) return null;
     
     for(u64 SectorsTransfered = 0; SectorsTransfered < TotalSectorsToRead; ){
         

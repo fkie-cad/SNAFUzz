@@ -1424,7 +1424,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                                 
                                 switch(service_action){
                                     case 0x10:{ // READ CAPACITY (16)
-                                        crash_assert(allocation_length >= 0x20);
+                                        crash_assert(allocation_length >= 0xc);
                                         
                                         u64 lba = (globals.disk_info.virtual_size / 0x200) - 1;
                                         

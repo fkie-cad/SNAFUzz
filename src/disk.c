@@ -1,5 +1,4 @@
 
-
 static int parse_disk(char *file_name){
     
     HANDLE file_handle = {0};
@@ -8,14 +7,18 @@ static int parse_disk(char *file_name){
     enum virtual_disk_kind kind = 0;
     if(cstring_ends_with_case_insensitive(file_name, ".vhdx"))  kind = VIRTUAL_DISK_vhdx;
     if(cstring_ends_with_case_insensitive(file_name, ".qcow2")) kind = VIRTUAL_DISK_qcow2;
+    if(strnicmp(file_name, "\\\\.\\PhysicalDrive", 4) == 0)     kind = VIRTUAL_DISK_raw; 
     
     switch(kind){
         case VIRTUAL_DISK_vhdx:  success = parse_vhdx(file_name, &file_handle);  break;
         case VIRTUAL_DISK_qcow2: success = parse_qcow2(file_name, &file_handle); break;
+        case VIRTUAL_DISK_raw:   success = parse_raw_disk(file_name, &file_handle); break;
         invalid_default_case();
     }
     
     if(!success) return 0;
+    
+    globals.disk_info.file_handle = file_handle;
     
 #if _WIN32
     
@@ -40,20 +43,33 @@ static int parse_disk(char *file_name){
 #endif
     
     if(PathLength <= 0 || PathLength > sizeof(PathBuffer)){
+        size_t len = strlen(file_name);
+        PathLength = (u32)(len > 0x1000 ? 0x1000 : len);
         print("Warning: Failed to get the full path for disk '%s'.\n", file_name);
-        print("         This means that, when taking a snapshot, the disk-path will not be saved.\n");
-    }else{
-        globals.disk_info.full_file_path.data = memcpy(malloc(PathLength + 1), PathBuffer, PathLength + 1);
-        globals.disk_info.full_file_path.size = PathLength;
+        
+        if(PathLength > sizeof(PathBuffer)){
+            print("         Huh? Path length (%llx) exceeds MAX_PATH? Only saving %.259s\n", PathLength, PathBuffer);
+            PathLength = 259;
+        }
+        
+        memcpy(PathBuffer, file_name, PathLength);
+        PathBuffer[PathLength] = 0;
+        
+        print("         This means that, when taking a snapshot, relative disk-path '%s' will be saved.\n", file_name);
     }
+    
+    
+    globals.disk_info.full_file_path.data = memcpy(malloc(PathLength + 1), PathBuffer, PathLength + 1);
+    globals.disk_info.full_file_path.size = PathLength;
     
     return 1;
 }
 
 static u8 *disk_read_sectors(struct memory_arena *arena, u64 total_sectors_to_read, u64 sector){
     switch(globals.disk_info.virtual_disk_kind){
-        case VIRTUAL_DISK_vhdx:  return  vhdx_read_sectors(arena, total_sectors_to_read, sector);
+        case VIRTUAL_DISK_vhdx:  return vhdx_read_sectors(arena, total_sectors_to_read, sector);
         case VIRTUAL_DISK_qcow2: return qcow2_read_sectors(arena, total_sectors_to_read, sector);
+        case VIRTUAL_DISK_raw:   return raw_disk_read_sectors(arena, total_sectors_to_read, sector);
         invalid_default_case();
     }
 }

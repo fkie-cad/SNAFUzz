@@ -686,6 +686,7 @@ struct globals{
             VIRTUAL_DISK_none,
             VIRTUAL_DISK_vhdx,
             VIRTUAL_DISK_qcow2,
+            VIRTUAL_DISK_raw,
         } virtual_disk_kind;
         
         u8 *mapped_address;
@@ -693,6 +694,7 @@ struct globals{
         u64 modification_time;
         u64 sector_size_in_bytes;
         struct string full_file_path;
+        HANDLE file_handle;
     } disk_info;
     
     struct context *main_thread_context;
@@ -755,6 +757,7 @@ void handle_debugger(struct context *context);
 
 #include "vhdx.c"
 #include "qcow2.c"
+#include "raw_disk.c"
 #include "disk.c"
 
 #include "apic.c"
@@ -1486,6 +1489,7 @@ int main(int argc, char *argv[]){
         print("disk-formats:\n");
         print("    .vhdx\n");
         print("    .qcow2\n");
+        print("    .raw (or \\\\.\\PhysicalDriveX)\n");
         print("\n");
         print("snapshot-formats:\n");
         print("    .dmp\n");
@@ -1521,6 +1525,7 @@ int main(int argc, char *argv[]){
     char *vmrs_file_name = null;
     char *dmp_file_name  = null;
     char *snapshot_file_name = null;
+    char *raw_file_name = null;
     
     // Repro options:
     char *repro_file_name    = null;
@@ -1639,8 +1644,18 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         option(snapshot);
         option(vhdx);
         option(qcow2);
+        option(raw);
         
 #undef option
+        
+        if(strnicmp(arg, "\\\\.\\PhysicalDrive", 4) == 0){
+            if(raw_file_name){
+                print("Error: More than one raw disk.\n");
+                return 1;
+            }
+            raw_file_name = arg;
+            continue;
+        }
         
         // 
         // C specifies that the 'argv' array is NULL-string terminated.
@@ -1697,6 +1712,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         if(vmrs_file_name)     amount_of_snapshot_files++;
         if(snapshot_file_name) amount_of_snapshot_files++;
         if(dmp_file_name)      amount_of_snapshot_files++;
+        if(raw_file_name)      amount_of_snapshot_files++;
         
         if(amount_of_snapshot_files > 1){
             print("Error: More than one snapshot file format specified.\n");
@@ -1750,17 +1766,19 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
     context->thread_index = -1;
     context->fuzz_case_timeout = 0x7fffffffffffffff; // @note: make sure the main thread never _times out_.
     
-    if(vhdx_file_name && qcow2_file_name){
+    if(vhdx_file_name && qcow2_file_name && raw_file_name){
         print("Error: More than one virtual disk specified, currently not supported.\n");
         print("       Disks:\n");
-        print("            %s\n", vhdx_file_name);
-        print("            %s\n", qcow2_file_name);
+        if(vhdx_file_name)  print("            %s\n", vhdx_file_name);
+        if(qcow2_file_name) print("            %s\n", qcow2_file_name);
+        if(raw_file_name)   print("            %s\n", raw_file_name);
         return 1;
     }
     
     char *disk_file_name = null;
-    if(vhdx_file_name)  disk_file_name =  vhdx_file_name;
+    if(vhdx_file_name)  disk_file_name = vhdx_file_name;
     if(qcow2_file_name) disk_file_name = qcow2_file_name;
+    if(raw_file_name)   disk_file_name = raw_file_name;
     
     if(disk_file_name){
         // Parse the disk device.

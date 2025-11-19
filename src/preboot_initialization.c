@@ -273,6 +273,11 @@ int efi_setup_initial_state(struct context *context){
             } partition_entry_array;
         } *gpt_header = (void *)disk_read_sectors(&context->scratch_arena, 1, starting_lba);
         
+        if(gpt_header->signature != 0x5452415020494645ULL){
+            print("[efi] Guid partition table has invalid signature %.8s, Expected 'EFI PART'.\n", (char *)&gpt_header->signature);
+            return 0;
+        }
+        
         print("disk guid " PRINT_GUID_FORMAT "\n", PRINT_GUID_MEMBERS(gpt_header->disk_guid));
         
         u64 partition_table_size_in_sectors = (gpt_header->partition_entry_array.number_of_entries * gpt_header->partition_entry_array.entry_size)/0x200; 
