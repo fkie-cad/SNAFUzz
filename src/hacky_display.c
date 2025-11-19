@@ -43,6 +43,28 @@
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "shell32.lib")
 
+void bring_console_to_front(void){
+    
+    HWND Window = GetConsoleWindow();
+    if(!Window) return;
+    
+    if(GetForegroundWindow() == Window) return;
+    
+    ShowWindow(Window, SW_RESTORE);
+    if(!SetForegroundWindow(Window)){
+        
+        FLASHWINFO FlashWindowInfo = { 
+            .cbSize = sizeof(FlashWindowInfo), 
+            .hwnd = Window, 
+            .dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG, 
+            .uCount = 3, 
+            .dwTimeout = 0 
+        };
+        
+        FlashWindowEx(&FlashWindowInfo);
+    }
+}
+
 static int left_mouse_down;
 static int right_mouse_down;
 static int mouse_z_delta;
@@ -424,6 +446,10 @@ unsigned initialize_hacky_display(void *unused){
 #include <unistd.h>
 #include <stdio.h>
 #include <signal.h>
+
+void bring_console_to_front(void){
+    // @incomplete
+}
 
 
 static int left_mouse_down;

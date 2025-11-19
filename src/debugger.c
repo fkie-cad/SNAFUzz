@@ -2169,6 +2169,8 @@ static void postpare_debugger_jit_call(struct context *context, struct debugger_
     context->use_hypervisor               = jit_call->use_hypervisor;
 }
 
+void bring_console_to_front(void);
+
 void handle_debugger(struct context *context){
     
     struct registers *registers = &context->registers;
@@ -2260,6 +2262,7 @@ void handle_debugger(struct context *context){
     struct debugger_jit_call_context debugger_jit_call_context;
     
     snapshot_mode_currently_in_debugger = true; // @note: We set this while in the debugger, so that we can CTRL-C.
+    bring_console_to_front();
     
     static struct string last_command = {0}; // only ever "s" or "n".
     
