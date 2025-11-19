@@ -1,7 +1,6 @@
 
 int parse_raw_disk(char *file_name, HANDLE *file_handle){
     globals.disk_info.virtual_disk_kind = VIRTUAL_DISK_raw;
-    globals.disk_info.sector_size_in_bytes = 512;
     globals.disk_info.mapped_address = (void *)1; // Kinda weird, but this needs to be set.
     
     *file_handle = CreateFileA(file_name, /*GENERIC_READ*/0x80000000L, /*FILE_SHARE_READ | FILE_SHARE_WRITE*/3, null, /*OPEN_EXISTING*/3, /*FILE_ATTRIBUTE_NORMAL*/0x80, null);
@@ -10,6 +9,26 @@ int parse_raw_disk(char *file_name, HANDLE *file_handle){
         print("Unable to CreateFileA(\"%s\"), GetLastError() = %u\n", file_name, GetLastError());
         return 0;
     }
+    
+    // @incomplete: This currently thinks we are using \\.\PhysicalDrive0 and not img.raw.
+    struct{
+        u64 Cylinders;
+        u32 MediaType;
+        u32 TracksPerCylinder;
+        u32 SectorsPerTrack;
+        u32 BytesPerSector;
+        u64 DiskSize;
+        u8 Data[0x200];
+    } DiskGeometryEx;
+    
+    int DeviceIoControlSuccess = DeviceIoControl(*file_handle, /*IOCTL_DISK_GET_DRIVE_GEOMETRY_EX*/0x700a0, null, 0, &DiskGeometryEx, sizeof(DiskGeometryEx), null, null);
+    if(!DeviceIoControlSuccess){
+        print("Unable to IOCTL_DISK_GET_DRIVE_GEOMETRY_EX for disk %s, GetLastError() = %u\n", file_name, GetLastError());
+        return 0;
+    }
+    
+    globals.disk_info.sector_size_in_bytes = DiskGeometryEx.BytesPerSector;
+    globals.disk_info.virtual_size = DiskGeometryEx.DiskSize;
     
     return 1;
 }

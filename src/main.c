@@ -190,6 +190,7 @@ __declspec(dllimport) int TerminateThread(HANDLE hThread, u32 dwExitCode);
 
 __declspec(dllimport) HANDLE CreateFileA(char *lpFileName, u32 dwDesiredAccess, u32 dwShareMode, void *lpSecurityAttributes, u32 dwCreationDisposition, u32 dwFlagsAndAttributes, void *hTemplateFile);
 __declspec(dllimport) int SetFilePointerEx(HANDLE hFile, u64 liDistanceToMove, u64 *lpNewFilePointer, u32 dwMoveMethod);
+__declspec(dllimport) int DeviceIoControl(HANDLE Device, u32 IoControlCode, void *InputBuffer, u32 InputBufferSize, void *OutputBuffer, u32 OutputBufferSize, u32 *BytesReturned, void *overlapped);
 
 __declspec(dllimport) int ReadFile(HANDLE hFile, void *lpBuffer, u32 nNumberOfBytesToRead, u32 *lpNumberOfBytesRead, void *lpOverlapped);
 __declspec(dllimport) HANDLE CreateFileMappingA(HANDLE hFile, void *lpFileMappingAttributes, u32 flProtect, u32 dwMaximumSizeHigh, u32 dwMaximumSizeLow, char *lpName);
