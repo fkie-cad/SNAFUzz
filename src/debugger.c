@@ -688,6 +688,78 @@ u64 parse_directive(struct context *context, struct string directive, struct str
         return value;
     }
     
+    if(string_match(directive, string("unicode_string_equals"))){ // @cleanup: Untested, realized I needed ansi string...
+        if(amount_of_arguments != 2){
+            *error = 1;
+            print("Expected one argument in @unicode_string_equals.\n");
+            return 0;
+        }
+        
+        struct string string = arguments[0];
+        u64 address = parse_address(context, &string, error);
+        if(*error) return 0;
+        
+        struct string module_name = arguments[1];
+        string_skip_whitespace(&module_name);
+        while(module_name.size && module_name.data[module_name.size-1] == ' ') module_name.size -= 1;
+        
+        if(!module_name.size || module_name.data[0] != '"' || module_name.data[module_name.size-1] != '"'){
+            print("Expected module name to be in quotes.\n");
+            *error = 1;
+            return 0;
+        }
+        
+        module_name.size -= 2;
+        module_name.data += 1;
+        
+        struct string actual_module_name = guest_read_unicode_string(context, &context->scratch_arena, address);
+        if(string_match(actual_module_name, module_name)){
+            return 1;
+        }else{
+            return 0;
+        }
+    }
+    
+    if(string_match(directive, string("ansi_path_equals"))){ // Pretty much just useful for blm (break load module).
+        if(amount_of_arguments != 2){
+            *error = 1;
+            print("Expected one argument in @unicode_string_equals.\n");
+            return 0;
+        }
+        
+        struct string string = arguments[0];
+        u64 address = parse_address(context, &string, error);
+        if(*error) return 0;
+        
+        struct string module_name = arguments[1];
+        string_skip_whitespace(&module_name);
+        while(module_name.size && module_name.data[module_name.size-1] == ' ') module_name.size -= 1;
+        
+        if(!module_name.size || module_name.data[0] != '"' || module_name.data[module_name.size-1] != '"'){
+            print("Expected module name to be in quotes.\n");
+            *error = 1;
+            return 0;
+        }
+        
+        module_name.size -= 2;
+        module_name.data += 1;
+        
+        u16 length  = guest_read(u16, address);
+        u64 ansi_address = guest_read(u64, address + 0x8);
+        char *data = push_data(&context->scratch_arena, char, length);
+        guest_read_size(context, data, ansi_address, length, PERMISSION_none);
+        
+        struct string actual_module_name = {.data = data, .size = length};
+        
+        actual_module_name = string_strip_file_extension(string_strip_file_path(actual_module_name));
+        
+        if(string_match(actual_module_name, module_name)){
+            return 1;
+        }else{
+            return 0;
+        }
+    }
+    
     print("Unknown directive '%.*s'\n", directive.size, directive.data);
     *error = 1;
     
@@ -3508,10 +3580,6 @@ void handle_debugger(struct context *context){
         
         if(string_match(command, string("blm"))){
             
-            if(context->use_hypervisor){
-                print("Hypervisor does not support module loading breakpoints.\n");
-                continue;
-            }
             
             struct string module_name = string_eat_nonwhitespace(&line);
             
@@ -3521,11 +3589,18 @@ void handle_debugger(struct context *context){
                 continue;
             }
             
-            if(globals.module_load_breakpoint_string.data) free(globals.module_load_breakpoint_string.data);
-            globals.module_load_breakpoint_string.data = malloc(module_name.size + 1);
-            globals.module_load_breakpoint_string.size = module_name.size;
-            globals.module_load_breakpoint_string.data[module_name.size] = 0;
-            memcpy(globals.module_load_breakpoint_string.data, module_name.data, module_name.size);
+            if(context->use_hypervisor){
+                static char buffer[0x100];
+                int length = snprintf(buffer, sizeof(buffer), "@ansi_path_equals(rcx, \"%.*s\") == 1", module_name.size, module_name.data);
+                
+                hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, 0, get_symbol(context, string("nt!KiDebugServiceTrap")), 1, (struct string){.data = buffer, .size = length});
+            }else{
+                if(globals.module_load_breakpoint_string.data) free(globals.module_load_breakpoint_string.data);
+                globals.module_load_breakpoint_string.data = malloc(module_name.size + 1);
+                globals.module_load_breakpoint_string.size = module_name.size;
+                globals.module_load_breakpoint_string.data[module_name.size] = 0;
+                memcpy(globals.module_load_breakpoint_string.data, module_name.data, module_name.size);
+            }
             
             print("Breaking when '%.*s' is loaded!\n", module_name.size, module_name.data);
             continue;
@@ -4647,16 +4722,15 @@ void handle_debugger(struct context *context){
                 continue;
             }
             
+            u64 KiIsrThunk = get_symbol(context, string("nt!KiIsrThunk"));
             
             for(u32 index = 0; index < array_count(idt); index++){
                 
                 struct _KIDTENTRY64 idt_entry = idt[index];
                 
                 u64 offset = ((u64)idt_entry.OffsetHigh << 32) + ((u64)idt_entry.OffsetMiddle << 16) + idt_entry.OffsetLow;
-                u64 KiIsrThunk = get_symbol(context, string("nt!KiIsrThunk"));
                 
-                
-                if(KiIsrThunk <= offset && offset < KiIsrThunk + 0x800){
+                if(KiIsrThunk && KiIsrThunk <= offset && offset < KiIsrThunk + 0x800){
                     //
                     // Get the interrupt from _KPRCB.InterruptObject.
                     //
