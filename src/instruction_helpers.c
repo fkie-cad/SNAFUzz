@@ -1354,26 +1354,41 @@ void helper_cpuid(struct context *context, struct registers *registers){
             rdx = 0x0;
         }break;
         
-        case 0x80000005:{
-            // Cache and TLB Identifiers.
-            rax = 0;
-            rbx = 0;
-            rcx = 0;
-            rdx = 0;
+        case 0x80000005:{ // Cache and TLB Identifiers.
+            
+            if(globals.cpu_vendor == VENDOR_AMD){
+                rax = 0xff40ff40; // ff = Data Cache associativity, 40 Data Chace line size, ff = Instruction Cache associativity, 40 Instruction Chace line size (Large Pages?)
+                rbx = 0xff40ff40; // ff = Data Cache associativity, 40 Data Chace line size, ff = Instruction Cache associativity, 40 Instruction Chace line size (4k Pages)
+                rcx = 0x20080140; // L1D size, L1D assoc, L1D Lines/tag, L1D line size
+                rdx = 0x40040140; // L1I size, L1I assoc, L1I Lines/tag, L1I line size
+            }else{
+                rax = 0;
+                rbx = 0;
+                rcx = 0;
+                rdx = 0;
+            }
         }break;
         
         case 0x80000006:{
-            rax = 0; // reserved
-            rbx = 0; // reserved
-            rcx = /*Cache line size in bytes*/0x40 | (/*L2 Associativity = 8 ways*/6 << 12) | (/*Cache size in 1K units*/0x100);
-            rdx = 0; // reserved
+            
+            if(globals.cpu_vendor == VENDOR_AMD){
+                rax = 0x26006400; // L2 TLB parameters, 2M/4M pages
+                rbx = 0x66006400; // L2 TLB parameters, 4K pages
+                rcx =  0x2006140; // L2 cache parameters
+                rdx =   0x808140; // Reserved ?
+            }else{
+                rax = 0; // reserved
+                rbx = 0; // reserved
+                rcx = /*Cache line size in bytes*/0x40 | (/*L2 Associativity = 8 ways*/6 << 12) | (/*Cache size in 1K units*/0x100);
+                rdx = 0; // reserved
+            }
         }break;
         
         case 0x80000007:{
             rax = 0; // reserved
             rbx = 0; // reserved
             rcx = 0; // reserved
-            rdx = 0x100; // Invariant TSC available, everything else reserved.
+            rdx = 0x100; // Invariant TSC available, everything else reserved. @cleanup: I this supposed to be unset for intel?
         }break;
         
         case 0x80000008:{
