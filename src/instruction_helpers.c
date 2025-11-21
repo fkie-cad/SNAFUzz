@@ -2017,6 +2017,22 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             disk_register_temporary_write(context, buffer, logical_block_address, transfer_size_in_blocks);
         }break;
         
+        case BIOS_read_key:{
+            struct hacky_event event = {0};
+            
+            while(events_processed < events_initiated){
+                event = event_buffer[events_processed % array_count(event_buffer)];
+                events_processed++;
+                
+                if(event.kind == HACKY_EVENT_key_event){
+                    break;
+                }
+            }
+            
+            u16 scan_code = event.kind == HACKY_EVENT_key_event ? event.keycode : 0;
+            guest_write(u16, registers->rdx, scan_code);
+        }break;
+        
         case /*MSR_POWER_CTL*/  0x1fc: msr_value = 0; break;
         case /*IA32_MC0_STATUS*/0x401: msr_value = 0; break;
         

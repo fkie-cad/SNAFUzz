@@ -3585,15 +3585,22 @@ void handle_debugger(struct context *context){
             
             struct loaded_module *module = get_loaded_module(module_name);
             if(module){
-                print("Module '%.*s' is already loaded.", module_name.size, module_name.data);
+                print("Module '%.*s' is already loaded.\n", module_name.size, module_name.data);
                 continue;
             }
             
             if(context->use_hypervisor){
+                
+                u64 KiDebugServiceTrap = get_symbol(context, string("nt!KiDebugServiceTrap"));
+                if(!KiDebugServiceTrap){
+                    print("Error: Could not find nt!KiDebugServiceTrap\n"); // Only really possible if not nt, but that happens if you have a snapshot on nt!KiSystemStartup.... Maybe I should handle this in a differant way in the future.
+                    continue;
+                }
+                
                 static char buffer[0x100];
                 int length = snprintf(buffer, sizeof(buffer), "@ansi_path_equals(rcx, \"%.*s\") == 1", module_name.size, module_name.data);
                 
-                hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, 0, get_symbol(context, string("nt!KiDebugServiceTrap")), 1, (struct string){.data = buffer, .size = length});
+                hypervisor_set_breakpoint(context, &context->registers, BREAKPOINT_execute, 0, KiDebugServiceTrap, 1, (struct string){.data = buffer, .size = length});
             }else{
                 if(globals.module_load_breakpoint_string.data) free(globals.module_load_breakpoint_string.data);
                 globals.module_load_breakpoint_string.data = malloc(module_name.size + 1);

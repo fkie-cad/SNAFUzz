@@ -153,6 +153,10 @@ void bios_disk_write(u64 lba, u64 buffer_size, void *buffer){
     cause_vmexit(BIOS_disk_write, lba, buffer_size, (u64)buffer);
 }
 
+void bios_key_read(u16 *scan_code){
+    cause_vmexit(BIOS_read_key, (u64)scan_code, 0, 0);
+}
+
 #if ENABLE_BIOS_LOGGING
 
 void bios_log(char *format, ...){
@@ -180,6 +184,16 @@ void bios_log(char *format, ...){
 struct efi_input_key{
     u16 scan_code;
     s16 unicode_char;
+};
+
+struct efi_key_state{
+    u32 key_shift_state;
+    u8 key_toggle_state; // scroll-, caps-, num-lock active
+};
+
+struct efi_key_data{
+    struct efi_input_key key;
+    struct efi_key_state key_state;
 };
 
 struct efi_simple_text_input_protocol{
@@ -211,8 +225,267 @@ struct efi_simple_text_input_ex_protocol{
     void *unregister_key_notify;
 };
 
-efi_status efi_simple_text_input_ex__reset(void){ log("unimplemented efi_simple_text_input_ex__reset\n"); bios_crash(); return 0; }
-efi_status efi_simple_text_input_ex__read_key_stroke(void){ log("unimplemented efi_simple_text_input_ex__read_key_stroke\n"); bios_crash(); return 0; }
+efi_status efi_simple_text_input_ex__reset(void){ log("unimplemented efi_simple_text_input_ex__reset\n"); /*bios_crash();*/ return 0; }
+
+efi_status efi_simple_text_input_ex__read_key_stroke(struct efi_simple_text_input_ex_protocol *efi_simple_text_input_ex_protolcol, struct efi_key_data *efi_key_data){
+    
+    u16 at101_scan_code = 0;
+    bios_key_read(&at101_scan_code);
+    
+    if(at101_scan_code == 0) return /*EFI_NOT_READY*/0x8000000000000006;
+    
+    // 
+    // Uggh, translate between AT101 to EFI scan codes.
+    // 
+    
+    u16 efi_scan_code = 0, unicode = 0;
+    
+    switch(at101_scan_code){
+        case 0x01:{ //  escape pressed
+            efi_scan_code = 0x17;
+        }break;
+        case 0x02:{ //  1 pressed
+            unicode = '1';
+        }break;
+        case 0x03:{ //  2 pressed
+            unicode = '2';
+        }break;
+        case 0x04:{ // 3 pressed
+            unicode = '3';
+        }break;
+        case 0x05:{ // 4 pressed
+            unicode = '4';
+        }break;
+        case 0x06:{ // 5 pressed
+            unicode = '5';
+        }break;
+        case 0x07:{ // 6 pressed
+            unicode = '6';
+        }break;
+        case 0x08:{ // 7 pressed
+            unicode = '7';
+        }break;
+        case 0x09:{ // 8 pressed
+            unicode = '8';
+        }break;
+        case 0x0A:{ // 9 pressed
+            unicode = '9';
+        }break;
+        case 0x0B:{ // 0 (zero) pressed
+            unicode = '0';
+        }break;
+        
+        case 0x0C:{ // - pressed
+            unicode = '-';
+        }break;
+        case 0x0D:{ // = pressed
+            unicode = '=';
+        }break;
+        case 0x0E:{ // backspace pressed
+            unicode = '\b';
+        }break;
+        case  0x0:{ // tab pressed
+            unicode = '\t';
+        }break;
+        
+        case 0x10:{ // Q pressed
+            unicode = 'q';
+        }break;
+        case 0x11:{ // W pressed
+            unicode = 'w';
+        }break;
+        case 0x12:{ // E pressed
+            unicode = 'e';
+        }break;
+        case 0x13:{ // R pressed
+            unicode = 'r';
+        }break;
+        case 0x14:{ // T pressed
+            unicode = 't';
+        }break;
+        case 0x15:{ // Y pressed
+            unicode = 'y';
+        }break;
+        case 0x16:{ // U pressed
+            unicode = 'u';
+        }break;
+        case 0x17:{ // I pressed
+            unicode = 'i';
+        }break;
+        case 0x18:{ // O pressed
+            unicode = 'o';
+        }break;
+        case 0x19:{ // P pressed
+            unicode = 'p';
+        }break;
+        case 0x1A:{ // [ pressed
+            unicode = '[';
+        }break;
+        case 0x1B:{ // ] pressed
+            unicode = ']';
+        }break;
+        
+        case 0x1C:{ // enter pressed
+            unicode = '\r';
+        }break;
+        
+        case 0x1E:{ // A pressed
+            unicode = 'A';
+        }break;
+        case 0x1F:{ // S pressed
+            unicode = 'S';
+        }break;
+        case 0x20:{ // D pressed
+            unicode = 'D';
+        }break;
+        case 0x21:{ // F pressed
+            unicode = 'F';
+        }break;
+        case 0x22:{ // G pressed
+            unicode = 'G';
+        }break;
+        case 0x23:{ // H pressed
+            unicode = 'H';
+        }break;
+        case 0x24:{ // J pressed
+            unicode = 'J';
+        }break;
+        case 0x25:{ // K pressed
+            unicode = 'K';
+        }break;
+        case 0x26:{ // L pressed
+            unicode = 'L';
+        }break;
+        case 0x27:{ //  ; pressed
+            unicode = ';';
+        }break;
+        
+        case 0x28:{ // ' (single quote) pressed
+            unicode = '\'';
+        }break;
+        
+        case 0x2B:{ // \ pressed
+            unicode = '\\';
+        }break;
+        
+        case 0x2C:{ // Z pressed
+            unicode = 'Z';
+        }break;
+        case 0x2D:{ // X pressed
+            unicode = 'X';
+        }break;
+        case 0x2E:{ // C pressed
+            unicode = 'C';
+        }break;
+        case 0x2F:{ // V pressed
+            unicode = 'V';
+        }break;
+        
+        case 0x30:{ // B pressed
+            unicode = 'B';
+        }break;
+        case 0x31:{ // N pressed
+            unicode = 'N';
+        }break;
+        case 0x32:{ // M pressed
+            unicode = 'M';
+        }break;
+        case 0x33:{ // , pressed
+            unicode = ',';
+        }break;
+        
+        case 0x34:{ // . pressed
+            unicode = '.';
+        }break;
+        case 0x35:{ // / pressed
+            unicode = '/';
+        }break;
+        // 0x37, // (keypad) * pressed
+        
+        // 0x38, // left alt pressed
+        case 0x39:{ // space pressed
+            unicode = ' ';
+        }break;
+        
+        case 0x3B:{ // F1 pressed
+            efi_scan_code = 0xb;
+        }break;
+        case 0x3C:{ // F2 pressed
+            efi_scan_code = 0xc;
+        }break;
+        case 0x3D:{ // F3 pressed
+            efi_scan_code = 0xd;
+        }break;
+        case 0x3E:{ // F4 pressed
+            efi_scan_code = 0xe;
+        }break;
+        case 0x3F:{ // F5 pressed
+            efi_scan_code = 0xf;
+        }break;
+        
+        case 0x40:{ // F6 pressed
+            efi_scan_code = 0x10;
+        }break;
+        case 0x41:{ // F7 pressed
+            efi_scan_code = 0x11;
+        }break;
+        case 0x42:{ // F8 pressed
+            efi_scan_code = 0x12;
+        }break;
+        case 0x43:{ // F9 pressed
+            efi_scan_code = 0x13;
+        }break;
+        
+        case 0x44:{ // F10 pressed
+            efi_scan_code = 0x14;
+        }break;
+        
+        case 0x57:{ //  F11 pressed
+            efi_scan_code = 0x15;
+        }break;
+        
+        // @note: These have the IS_E0 bit set (4 << 8).
+        case 0x0448:{  // cursor up pressed
+            efi_scan_code = 1;
+        }break;
+        case 0x0449:{ // page up pressed
+            efi_scan_code = 9;
+        }break;
+        case 0x044B:{ // cursor left pressed
+            efi_scan_code = 4;
+        }break;
+        case 0x044D:{ // cursor right pressed
+            efi_scan_code = 3;
+        }break;
+        case 0x044F:{ // end pressed
+            efi_scan_code = 6;
+        }break;
+        case 0x0450:{ // cursor down pressed
+            efi_scan_code = 2;
+        }break;
+        case 0x0451:{ // page down pressed
+            efi_scan_code = 10;
+        }break;
+        case 0x0452:{ // insert pressed
+            efi_scan_code = 7;
+        }break;
+        case 0x0453:{ // delete pressed
+            efi_scan_code = 8;
+        }break;
+    }
+    
+    if(efi_scan_code == 0 && unicode == 0) return /*EFI_NOT_READY*/0x8000000000000006; // @Hmm, error here?
+    
+    efi_key_data->key.scan_code = efi_scan_code;
+    efi_key_data->key.unicode_char = unicode;
+    efi_key_data->key_state.key_shift_state = 0;
+    efi_key_data->key_state.key_toggle_state = 0;
+    
+    log("efi_key_data->key.scan_code %x efi_key_data->key.unicode_char %x\n", efi_scan_code, unicode);
+    
+    return 0;
+}
+
 efi_status efi_simple_text_input_ex__set_state(void){ 
     log("stubbed efi_simple_text_input_ex__set_state"); 
     return 0; 

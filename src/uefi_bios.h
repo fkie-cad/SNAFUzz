@@ -19,6 +19,10 @@
 #define BIOS_disk_read  0x1337cafe
 #define BIOS_disk_write 0x1337f00d
 
+// Allows to interact with the keyboard pre-boot.
+#define BIOS_read_key   0x1337beef
+
+
 struct cpuid_drag_and_drop_input_buffer{
     char *file_name;
     u64 file_name_size;

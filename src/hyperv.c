@@ -1279,6 +1279,7 @@ void start_execution_hypervisor(struct context *context){
                         case BIOS_log:
                         case BIOS_disk_read:
                         case BIOS_disk_write:
+                        case BIOS_read_key:
                         
                         case IA32_TSC:
                         case /*MSR_IA32_PLATFORM_ID*/0x17:
