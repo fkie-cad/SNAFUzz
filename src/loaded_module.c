@@ -592,6 +592,13 @@ struct loaded_module *parse_loaded_module(struct context *context, u64 guest_ima
     if(!short_name.size){
         loaded_module_try_to_load_pdb(context, module);
         if(!module->pdb_context) return null; // If we could not load the thing and we dont have a name, skip it. @cleanup: this is all terribly hacky... :(
+        
+        struct loaded_module *other = get_loaded_module(module->short_name);
+        if(other){
+            other->guest_image_base = guest_image_base;
+            other->size_of_image    = image_size;
+            return other;
+        }
     }
     
     // 

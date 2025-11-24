@@ -1991,7 +1991,7 @@ efi_status efi_get_variable(u16 *variable_name, struct efi_guid *vendor_guid, u3
     
     if(data_size) __movsb(data, variable->data, variable->data_size);
     
-    return 0; 
+    return 0;
 }
 
 efi_status efi_get_next_variable(u64 *inout_variable_name_size, u16 *inout_variable_name, struct efi_guid *inout_vendor_guid){ 
@@ -2027,9 +2027,6 @@ efi_status efi_get_next_variable(u64 *inout_variable_name_size, u16 *inout_varia
 }
 
 efi_status efi_set_variable(u16 *variable_name, struct efi_guid *vendor_guid, u32 attributes, u64 data_size, void *data){
-    u32 variable_name_length = (u32)wide_string_length(variable_name);
-    if(!variable_name_length) return -1; // @cleanup: error code.
-    
     
 #if ENABLE_BIOS_LOGGING
     u8 buffer[0x100] = {0};
@@ -2040,21 +2037,49 @@ efi_status efi_set_variable(u16 *variable_name, struct efi_guid *vendor_guid, u3
     log("efi_set_variable %s attributes: 0x%x", buffer, attributes);
 #endif
     
-    if(g_system_table.boot_services == null){
-        log("efi_set_variable after exit_boot_services... failling for now."); // @incomplete:
-        return -1;
+    u32 variable_name_length = (u32)wide_string_length(variable_name);
+    if(!variable_name_length) return -1; // VariableName must contain 1 or more characters. If VariableName is an empty string, then EFI_INVALID_PARAMETER is returned.
+    
+    struct efi_variable **prev = &g_efi_variable_list.first;
+    struct efi_variable *variable = 0;
+    
+    for(struct efi_variable *it = g_efi_variable_list.first; it; prev = &it->next, it = it->next){
+        
+        if(wide_string_match(it->variable_name, variable_name)){
+            variable = it;
+            break;
+        }
     }
     
-    u64 size = sizeof(struct efi_variable) + data_size + (data_size & 1) + 2*(variable_name_length + 1);
-    
-    if(efi_variable_buffer_at + size > array_count(efi_variable_buffer)){
-        log("Ran out of efi_variable space.");
-        bios_crash();
+    if(variable && variable->data_size < data_size){
+        *prev = variable->next; // no free :)
+        
+        if(variable == g_efi_variable_list.last){
+            g_efi_variable_list.last = (void *)prev;
+        }
+        
+        variable = null;
+        if(data_size == 0) return 0;
     }
     
-    u8 *address = efi_variable_buffer + efi_variable_buffer_at;
+    int should_add = !variable;
     
-    struct efi_variable *variable = (void *)address;
+    if(!variable){
+        
+        u64 size = sizeof(struct efi_variable) + data_size + (data_size & 1) + 2*(variable_name_length + 1);
+        
+        if(efi_variable_buffer_at + size > array_count(efi_variable_buffer)){
+            log("Ran out of efi_variable space.");
+            bios_crash();
+        }
+        
+        u8 *address = efi_variable_buffer + efi_variable_buffer_at;
+        
+        variable = (void *)address;
+        
+        efi_variable_buffer_at += (size + 7) & ~7; // align up to have the next variable start on an 8-byte boundary.
+    }
+    
     variable->next = null;
     variable->attributes = attributes;
     variable->data_size = data_size;
@@ -2062,17 +2087,15 @@ efi_status efi_set_variable(u16 *variable_name, struct efi_guid *vendor_guid, u3
     variable->variable_name = (u16 *)(variable->data + data_size + (data_size & 1));
     __movsw(variable->variable_name, variable_name, variable_name_length + 1);
     
+    log("variable: %p", variable);
     
-    efi_variable_buffer_at += (size + 7) & ~7; // align up to have the next variable start on an 8-byte boundary.
-    
-    log("variable: %p", address);
-    
-    if(g_efi_variable_list.first){
-        g_efi_variable_list.last = g_efi_variable_list.last->next = variable;
-    }else{
-        g_efi_variable_list.first = g_efi_variable_list.last = variable;
+    if(should_add){
+        if(g_efi_variable_list.first){
+            g_efi_variable_list.last = g_efi_variable_list.last->next = variable;
+        }else{
+            g_efi_variable_list.first = g_efi_variable_list.last = variable;
+        }
     }
-    
 #if ENABLE_BIOS_LOGGING
     log("new variables:");
     for(struct efi_variable *var = g_efi_variable_list.first; var; var = var->next){

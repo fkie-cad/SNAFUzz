@@ -410,6 +410,53 @@ void update_exception_exit_bitmap(struct context *context){
     }
 }
 
+void hyperv_apply_local_apic_state(struct context *context){
+    
+    // 
+    // Synchronize the local apic state.
+    // 
+    
+    struct registers *registers = &context->registers;
+    struct serialized_local_apic local_apic = {0};
+    
+    u32 size_written;
+    s32 Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic), &size_written);
+    if(Result < 0 || size_written != sizeof(local_apic)){
+        print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
+        os_panic(1);
+    }
+    
+    local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
+    local_apic.arbitration_priority_register[0] = registers->local_apic.arbitration_priority_register;
+    local_apic.processor_priority_register[0] = registers->local_apic.processor_priority_register;
+    local_apic.local_destination_register[0] = registers->local_apic.local_destination_register;
+    local_apic.destination_format_register[0] = registers->local_apic.destination_format_register;
+    local_apic.spurious_interrupt_vector_register[0] = registers->local_apic.spurious_interrupt_vector_register;
+    
+    for(u32 index = 0; index < 8; index++){
+        local_apic.in_service_register[index][0] = registers->local_apic.in_service_register[index];
+        local_apic.trigger_mode_register[index][0] = registers->local_apic.trigger_mode_register[index];
+        local_apic.interrupt_request_register[index][0] = registers->local_apic.interrupt_request_register[index];
+    }
+    
+    local_apic.error_status_register[0] = registers->local_apic.error_status_register;
+    
+    local_apic.local_vector_table_corrected_machine_check_interrupt_register[0] = registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register;
+    local_apic.local_vector_table_timer_register[0] = registers->local_apic.local_vector_table.timer_register;
+    local_apic.local_vector_table_thermal_sensor_register[0] = registers->local_apic.local_vector_table.thermal_sensor_register;
+    local_apic.local_vector_table_performance_monitoring_counters_register[0] = registers->local_apic.local_vector_table.performance_monitoring_counters_register;
+    local_apic.local_vector_table_lint0_register[0] = registers->local_apic.local_vector_table.lint0_register;
+    local_apic.local_vector_table_lint1_register[0] = registers->local_apic.local_vector_table.lint1_register;
+    local_apic.local_vector_table_error_register[0] = registers->local_apic.local_vector_table.error_register;
+    local_apic.timer_divide_configuration_register[0] = registers->local_apic.timer_divide_configuration_register;
+    
+    Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic));
+    if(Result < 0 || size_written != sizeof(local_apic)){
+        print("[WHvSetVirtualProcessorInterruptControllerState2] %x\n", Result);
+        os_panic(1);
+    }
+}
+
 void start_execution_hypervisor(struct context *context){
     
     // 
@@ -527,50 +574,7 @@ void start_execution_hypervisor(struct context *context){
         os_panic(1);
     }
     
-    {
-        // 
-        // Synchronize the local apic state.
-        // 
-        
-        struct serialized_local_apic local_apic = {0};
-        
-        u32 size_written;
-        s32 Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic), &size_written);
-        if(Result < 0 || size_written != sizeof(local_apic)){
-            print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
-            os_panic(1);
-        }
-        
-        local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
-        local_apic.arbitration_priority_register[0] = registers->local_apic.arbitration_priority_register;
-        local_apic.processor_priority_register[0] = registers->local_apic.processor_priority_register;
-        local_apic.local_destination_register[0] = registers->local_apic.local_destination_register;
-        local_apic.destination_format_register[0] = registers->local_apic.destination_format_register;
-        local_apic.spurious_interrupt_vector_register[0] = registers->local_apic.spurious_interrupt_vector_register;
-        
-        for(u32 index = 0; index < 8; index++){
-            local_apic.in_service_register[index][0] = registers->local_apic.in_service_register[index];
-            local_apic.trigger_mode_register[index][0] = registers->local_apic.trigger_mode_register[index];
-            local_apic.interrupt_request_register[index][0] = registers->local_apic.interrupt_request_register[index];
-        }
-        
-        local_apic.error_status_register[0] = registers->local_apic.error_status_register;
-        
-        local_apic.local_vector_table_corrected_machine_check_interrupt_register[0] = registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register;
-        local_apic.local_vector_table_timer_register[0] = registers->local_apic.local_vector_table.timer_register;
-        local_apic.local_vector_table_thermal_sensor_register[0] = registers->local_apic.local_vector_table.thermal_sensor_register;
-        local_apic.local_vector_table_performance_monitoring_counters_register[0] = registers->local_apic.local_vector_table.performance_monitoring_counters_register;
-        local_apic.local_vector_table_lint0_register[0] = registers->local_apic.local_vector_table.lint0_register;
-        local_apic.local_vector_table_lint1_register[0] = registers->local_apic.local_vector_table.lint1_register;
-        local_apic.local_vector_table_error_register[0] = registers->local_apic.local_vector_table.error_register;
-        local_apic.timer_divide_configuration_register[0] = registers->local_apic.timer_divide_configuration_register;
-        
-        Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic));
-        if(Result < 0 || size_written != sizeof(local_apic)){
-            print("[WHvSetVirtualProcessorInterruptControllerState2] %x\n", Result);
-            os_panic(1);
-        }
-    }
+    hyperv_apply_local_apic_state(context);
     
     registers->dr7 |= (1 << 13); // General Detect Enable. Causes a debug Exception on any attempt at accessing dr0-dr7.
     registers->dr6 &= ~(1 << 13); // Clear the Debug register Access detected bit.
@@ -987,20 +991,13 @@ void start_execution_hypervisor(struct context *context){
                 registers->local_apic.local_vector_table.error_register = local_apic.local_vector_table_error_register[0];
                 registers->local_apic.timer_divide_configuration_register = local_apic.timer_divide_configuration_register[0];
                 
-                
                 registers->local_apic.highest_pending_interrupt = apic__get_highest_set_bit(registers->local_apic.interrupt_request_register);
                 registers->local_apic.highest_interrupt_in_service = apic__get_highest_set_bit(registers->local_apic.in_service_register);
             }
         }
         
         if(snapshot_mode_should_break_in_debugger){
-            
-            u8 *maybe_hlt = translate_address(context, context->registers.rip-1, PERMISSION_none);
-            if(maybe_hlt && *maybe_hlt == /*hlt*/0xf4){
-                handle_debugger(context);
-            }else{
-                hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
-            }
+            handle_debugger(context);
             snapshot_mode_should_break_in_debugger = 0;
         }
         
@@ -1168,6 +1165,30 @@ void start_execution_hypervisor(struct context *context){
                     u32 AccessSizeBits = IoPortAccessInfo->AccessSize * 8;
                     u32 AccessBitMask = (u32)((1ull << AccessSizeBits) - 1); // @note: Do the shift in 64-bits, otherwise shifting by 32 is undefined.
                     u32 Value = (u32)IoPortAccessInfo->Rax & AccessBitMask;
+                    
+                    if(IoPortAccessInfo->PortNumber == /*reset*/0x433){
+                        print("Reset!\n");
+                        handle_debugger(context);
+                        
+                        memset(&context->vmbus, 0, sizeof(context->vmbus));
+                        memset(&context->registers, 0, sizeof(context->registers));
+                        invalidate_translate_lookaside_buffers(context);
+                        efi_setup_initial_state(context);
+                        
+                        // @note: We fix up the descriptors here as the jit does not care about anything but the selector.
+                        registers->cs = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->cs.selector);
+                        registers->ss = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->ss.selector);
+                        registers->ds = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->ds.selector);
+                        registers->es = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->es.selector);
+                        
+                        registers->fs = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->fs.selector);
+                        registers->gs = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->gs.selector);
+                        registers->gs.base = registers->gs_base;
+                        registers->fs.base = registers->fs_base;
+                        
+                        handle_debugger(context);
+                        continue;
+                    }
                     
                     write_to_port_helper(context, registers, IoPortAccessInfo->PortNumber, Value);
                 }else{
@@ -1559,52 +1580,7 @@ void start_execution_hypervisor(struct context *context){
                 helper_vmcall(context, registers);
                 if(registers->rip != ExitContext.VpContext.Rip){
                     // Vtl return or vtl call.
-                    
-                    {
-                        // 
-                        // Synchronize the local apic state. @cleanup: Umm, why can we not do this everytime?
-                        // 
-                        
-                        struct serialized_local_apic local_apic = {0};
-                        
-                        u32 size_written;
-                        Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic), &size_written);
-                        if(Result < 0 || size_written != sizeof(local_apic)){
-                            print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
-                            os_panic(1);
-                        }
-                        
-                        local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
-                        local_apic.arbitration_priority_register[0] = registers->local_apic.arbitration_priority_register;
-                        local_apic.processor_priority_register[0] = registers->local_apic.processor_priority_register;
-                        local_apic.local_destination_register[0] = registers->local_apic.local_destination_register;
-                        local_apic.destination_format_register[0] = registers->local_apic.destination_format_register;
-                        local_apic.spurious_interrupt_vector_register[0] = registers->local_apic.spurious_interrupt_vector_register;
-                        
-                        for(u32 index = 0; index < 8; index++){
-                            local_apic.in_service_register[index][0] = registers->local_apic.in_service_register[index];
-                            local_apic.trigger_mode_register[index][0] = registers->local_apic.trigger_mode_register[index];
-                            local_apic.interrupt_request_register[index][0] = registers->local_apic.interrupt_request_register[index];
-                        }
-                        
-                        local_apic.error_status_register[0] = registers->local_apic.error_status_register;
-                        
-                        local_apic.local_vector_table_corrected_machine_check_interrupt_register[0] = registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register;
-                        local_apic.local_vector_table_timer_register[0] = registers->local_apic.local_vector_table.timer_register;
-                        local_apic.local_vector_table_thermal_sensor_register[0] = registers->local_apic.local_vector_table.thermal_sensor_register;
-                        local_apic.local_vector_table_performance_monitoring_counters_register[0] = registers->local_apic.local_vector_table.performance_monitoring_counters_register;
-                        local_apic.local_vector_table_lint0_register[0] = registers->local_apic.local_vector_table.lint0_register;
-                        local_apic.local_vector_table_lint1_register[0] = registers->local_apic.local_vector_table.lint1_register;
-                        local_apic.local_vector_table_error_register[0] = registers->local_apic.local_vector_table.error_register;
-                        local_apic.timer_divide_configuration_register[0] = registers->local_apic.timer_divide_configuration_register;
-                        
-                        Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic));
-                        if(Result < 0 || size_written != sizeof(local_apic)){
-                            print("[WHvSetVirtualProcessorInterruptControllerState2] %x\n", Result);
-                            os_panic(1);
-                        }
-                    }
-                    
+                    hyperv_apply_local_apic_state(context);
                     continue;
                 }
             }break;
@@ -1645,6 +1621,9 @@ void start_execution_hypervisor(struct context *context){
                 
                 if(ExitContext.ExitReason == /*WHvRunVpExitReasonInvalidVpRegisterValue*/5){
                     print("    -> Invalid Vp Register Value\n");
+                }
+                if(ExitContext.ExitReason == /*WHvRunVpExitReasonUnrecoverableException*/4){
+                    print("    -> Unrecoverable Exception\n");
                 }
                 
                 handle_debugger(context);
