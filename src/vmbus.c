@@ -462,6 +462,15 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 u32 read_ring_buffer_pages;
                 u8 user_data[120];
             } open_channel;
+            
+            struct{
+                u32 child_id;
+                u32 gpadl_id;
+            } teardown;
+            
+            struct{
+                u32 child_relid;
+            } close_channel;
         };
     } *message = payload;
     
@@ -627,6 +636,26 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     >>> %s\n", vmbus_device_kind_string[channel->device_kind]);
             if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
             if(channel->device_kind == VMBUS_DEVICE_keyboard) context->vmbus.keyboard = channel;
+        }break;
+        
+        case /*CLOSECHANNEL*/7:{
+            if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     close channel %u\n",  message->close_channel.child_relid);
+        }break;
+        
+        case /*GPADL_TEARDOWN*/11:{
+            if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     teardown gpadl %u %u\n", message->teardown.child_id, message->teardown.gpadl_id);
+            
+            struct{
+                u32 message_type;
+                u32 reserved;
+                
+                u32 gpadl_id;
+            } message_gpadl_torndown = {
+                .message_type = /*VMBUSS_MSG_GPADL_TORNDOWN*/12,
+                .gpadl_id = message->teardown.gpadl_id,
+            };
+            
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &message_gpadl_torndown, sizeof(message_gpadl_torndown));
         }break;
         
         default:{
