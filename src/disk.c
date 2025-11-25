@@ -7,7 +7,7 @@ static int parse_disk(char *file_name){
     enum virtual_disk_kind kind = 0;
     if(cstring_ends_with_case_insensitive(file_name, ".vhdx"))  kind = VIRTUAL_DISK_vhdx;
     if(cstring_ends_with_case_insensitive(file_name, ".qcow2")) kind = VIRTUAL_DISK_qcow2;
-    if(strnicmp(file_name, "\\\\.\\PhysicalDrive", 4) == 0)     kind = VIRTUAL_DISK_raw; 
+    if(strnicmp(file_name, RAW_DISK_STRING, sizeof(RAW_DISK_STRING)-1) == 0)     kind = VIRTUAL_DISK_raw; 
     
     switch(kind){
         case VIRTUAL_DISK_vhdx:  success = parse_vhdx(file_name, &file_handle);  break;

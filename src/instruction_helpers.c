@@ -2599,8 +2599,14 @@ void helper_wrmsr(struct context *context, struct registers *registers){
 //_____________________________________________________________________________________________________________________
 // vmcall
 
+#if ENABLE_VSM && !defined(_WIN32)
+#error Currently no VSM for lunix.
+#endif
+
+#if ENABLE_VSM
 // @cleanup: factoring.
 __declspec(dllimport) s32 WHvMapGpaRange(HANDLE Partition, void *SourceAddress, u64 PhysicalGuestAddress, u64 SizeInBytes, u32 Flags);
+#endif
 
 void helper_vmcall(struct context *context, struct registers *registers){
     
@@ -2751,6 +2757,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             invalidate_translate_lookaside_buffers(context); // @cleanup?
         }break;
         
+#if ENABLE_VSM
         case /*HvModifyVtlProtectionMask*/0xc:{
             
             // 
@@ -2916,7 +2923,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             context->registers.cr3 = current_cr3;
         }break;
-        
+#endif
         
         // 
         // Vsm stuff.

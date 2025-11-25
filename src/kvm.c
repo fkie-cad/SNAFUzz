@@ -35,6 +35,7 @@ void hypervisor_pend_interrupt(struct context *context, struct registers *regist
 
 
 void kvmb_user_signal(int sig){}
+void update_exception_exit_bitmap(struct context *context){}
 
 void start_execution_hypervisor(struct context *context){
     
@@ -512,7 +513,7 @@ void start_execution_hypervisor(struct context *context){
     if(globals.single_stepping){
         // If we are starting by 'single stepping', it means we want to enter the debugger on the first instruction.
         // Hence, we put a breakpoint on the instruction we are currently at.
-        hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, registers->rip, 1);
+        hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, registers->rip, 1, (struct string){0});
     }
     
     int first_time = 1;
@@ -1158,7 +1159,7 @@ void start_execution_hypervisor(struct context *context){
                             
                             if(instruction.reg == 7 && registers->gpr[instruction.regm] == 1){
                                 // Set the breakpoint the guest has requested as a oneshot breakpoint.
-                                hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, context->potentially_usermode_snapshotting_breakpoint, 1);
+                                hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, context->potentially_usermode_snapshotting_breakpoint, 1, (struct string){0});
                             }
                         }
                     }

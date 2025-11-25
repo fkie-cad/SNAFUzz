@@ -1649,7 +1649,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         
 #undef option
         
-        if(strnicmp(arg, "\\\\.\\PhysicalDrive", 4) == 0){
+        if(strnicmp(arg, RAW_DISK_STRING, sizeof(RAW_DISK_STRING)-1) == 0){
             if(raw_file_name){
                 print("Error: More than one raw disk.\n");
                 return 1;
