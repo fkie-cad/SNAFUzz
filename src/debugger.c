@@ -2963,6 +2963,11 @@ void handle_debugger(struct context *context){
                 else if(string_match(reg, string("vp_assist")) || string_match(reg, string("vp_assist_page")) || string_match(reg, string("hv_x64_msr_vp_assist_page"))) { print("%p\n", registers->hv_x64_msr_vp_assist_page); }
                 else if(string_match(reg, string("hypercall")) || string_match(reg, string("hypercall_page")) || string_match(reg, string("hv_x64_msr_hypercall_page"))) { print("%p\n", registers->hv_x64_msr_hypercall_page); }
                 else if(string_match(reg, string("reference_tsc")) || string_match(reg, string("reference_tsc_page")) || string_match(reg, string("hv_x64_msr_reference_tsc_page"))) { print("%p\n", registers->hv_x64_msr_reference_tsc_page); }
+                else if(string_match(reg, string("sint"))){
+                    for(u32 index = 0; index < 16; index++){
+                        print("sint%d = %p\n", index, registers->hv_x64_msr_sint[index]);
+                    }
+                }
                 
                 else print("Could not parse '%.*s' as a register.\n", reg.size, reg.data);
             }
@@ -4615,6 +4620,19 @@ void handle_debugger(struct context *context){
             
             print("apic base %p\n\n", registers->ia32_apic_base);
             
+            struct local_apic *local_apic = &registers->local_apic;
+            print("id: 0x%x\n", local_apic->id_register);
+            print("version: 0x%x\n", local_apic->version_register);
+            print("task_priority: 0x%x\n", local_apic->task_priority_register);
+            print("arbitration_priority: 0x%x\n", local_apic->arbitration_priority_register);
+            print("processor_priority: 0x%x\n", local_apic->processor_priority_register);
+            print("eoi: 0x%x\n", local_apic->end_of_interrupt_register);
+            print("remote_read: 0x%x\n", local_apic->remote_read_register);
+            print("local_destination: 0x%x\n", local_apic->local_destination_register);
+            print("destination_format_register: 0x%x\n", local_apic->destination_format_register);
+            print("spurious_interrupt_vector_register: 0x%x\n", local_apic->spurious_interrupt_vector_register);
+            print("\n");
+            
             print("Interrupts in service: ");
             for(u32 index = 0; index < 256; index++){
                 if(registers->local_apic.in_service_register[index/32] & (1u << (index % 32))){
@@ -4623,6 +4641,15 @@ void handle_debugger(struct context *context){
             }
             print("\n");
             print("highest interrupt in service: %x\n", registers->local_apic.highest_interrupt_in_service);
+            
+            
+            print("edge triggered interrupts: ");
+            for(u32 index = 0; index < 256; index++){
+                if(registers->local_apic.in_service_register[index/32] & (1u << (index % 32))){
+                    print("%x ", index);
+                }
+            }
+            print("\n");
             
             print("Interrupts requested: ");
             for(u32 index = 0; index < 256; index++){
@@ -4633,6 +4660,23 @@ void handle_debugger(struct context *context){
             print("\n");
             print("highest pending interrupt:    %x\n", registers->local_apic.highest_pending_interrupt);
             
+            print("error_status_register: 0x%x\n", local_apic->error_status_register);
+            
+            print("ICR: 0x%x 0x%x\n", local_apic->interrupt_command_register.low, local_apic->interrupt_command_register.low);
+            
+            print("local_vector_table:\n");
+            print("    corrected_machine_check_interrupt: 0x%x\n", local_apic->local_vector_table.corrected_machine_check_interrupt_register);
+            print("    timer: 0x%x\n", local_apic->local_vector_table.timer_register);
+            print("    thermal_sensor: 0x%x\n", local_apic->local_vector_table.thermal_sensor_register);
+            print("    performance_monitory_counters: 0x%x\n", local_apic->local_vector_table.performance_monitoring_counters_register);
+            print("    lint0: 0x%x\n", local_apic->local_vector_table.lint0_register);
+            print("    lint1: 0x%x\n", local_apic->local_vector_table.lint1_register);
+            print("    error: 0x%x\n", local_apic->local_vector_table.error_register);
+            print("\n");
+            
+            print("timer_initial_count_register = 0x%x\n", local_apic->timer_initial_count_register);
+            print("timer_current_count_register = 0x%x\n", local_apic->timer_current_count_register);
+            print("timer_divide_configuration_register = 0x%x\n", local_apic->timer_divide_configuration_register);
             
             continue;
         }
