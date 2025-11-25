@@ -198,6 +198,7 @@ struct pdb_context{
     struct pdb_stream *streams;
     
     struct pdb_hash_table type_table;
+    struct pdb_hash_table enum_table;
     struct pdb_hash_table publics_table;
     struct pdb_hash_table symbol_table;
     struct pdb_hash_table constant_table;
@@ -608,9 +609,11 @@ struct pdb_context *load_pdb(struct file pdb_file){
     // @note: For now we ignore the PDB Stream, we don't care about line information
     //        and for now we don't match against a .exe.
     
-    pdb_context->type_table    = pdb_hash_table_initialize();
-    pdb_context->symbol_table  = pdb_hash_table_initialize();
-    pdb_context->publics_table = pdb_hash_table_initialize();
+    pdb_context->type_table     = pdb_hash_table_initialize();
+    pdb_context->enum_table     = pdb_hash_table_initialize();
+    pdb_context->symbol_table   = pdb_hash_table_initialize();
+    pdb_context->publics_table  = pdb_hash_table_initialize();
+    pdb_context->constant_table = pdb_hash_table_initialize();
     
     {
         //
@@ -748,6 +751,21 @@ struct pdb_context *load_pdb(struct file pdb_file){
                     // Register the type in the hash table.
                     //
                     pdb_hash_table_insert(&pdb_context->type_table, (struct codeview_record_header *)(tpi_stream.base + type_offset), name, field_list_type_index);
+                }break;
+                
+                case 0x1507:{ // LF_ENUM
+                    u16 count      = pdb_read_type__failable(&type_stream, u16, &error);
+                    u16 properties = pdb_read_type__failable(&type_stream, u16, &error);
+                    u32 underlying = pdb_read_type__failable(&type_stream, u32, &error);
+                    u32 field_list_type_index = pdb_read_type__failable(&type_stream, u32, &error);
+                    
+                    (void)count, (void)properties, (void)underlying;
+                    // @cleanup: are there enum forward refs?
+                    
+                    struct string name = pdb_read_zero_terminated_string(&type_stream);
+                    if(!name.data) break;
+                    
+                    pdb_hash_table_insert(&pdb_context->enum_table, (struct codeview_record_header *)(tpi_stream.base + type_offset), name, field_list_type_index);
                 }break;
             }
         }
@@ -1837,10 +1855,107 @@ static smm pdb_print_type(struct context *context, struct pdb_context *pdb_conte
     return size;
 }
 
+struct string pdb_find_enum_member(struct pdb_context *pdb_context, struct string type_name, u64 enum_value){
+    
+    struct pdb_hash_table_entry *initial_type = pdb_hash_table_get(&pdb_context->enum_table, type_name);
+    
+    if(initial_type){
+        
+        u32 fieldlist_type_index = (u32)initial_type->rva_value_or_type_index;
+        struct codeview_record_header *fieldlist = pdb_get_record_for_type_index(pdb_context, fieldlist_type_index);
+        
+        if(!fieldlist || fieldlist->kind != 0x1203){
+            print("Type '%.*s' has invalid fieldlist.\n", type_name.size, type_name.data);
+            return (struct string){0};
+        }
+        
+        struct pdb_stream fieldlist_stream = {
+            .base = (void *)(fieldlist + 1),
+            .size = fieldlist->length - 2,
+        };
+        
+        int error = 0;
+        
+        while(fieldlist_stream.current_offset < fieldlist_stream.size){
+            u16 field_kind     = pdb_read_type__failable(&fieldlist_stream, u16, &error);
+            /*u16 attributes = */pdb_read_type__failable(&fieldlist_stream, u16, &error); // C++ stuff
+            u64 value = pdb_read_numeric_leaf_as_u64(&fieldlist_stream, &error);
+            struct string name = pdb_read_zero_terminated_string(&fieldlist_stream);
+            
+            if(error || field_kind != /*LF_ENUMERATE*/0x1502 || !name.data){
+                print("Fieldlist %x is invalid.\n", fieldlist_type_index);
+                return (struct string){0};
+            }
+            
+            // Align the stream to a 4-byte boundary.
+            fieldlist_stream.current_offset = (fieldlist_stream.current_offset + 3) & ~3;
+            
+            if(enum_value == value) return name;
+        }
+    }
+    
+    return (struct string){0};
+}
+
 void pdb_dump_type(struct context *context, struct pdb_context *pdb_context, struct string type_name, struct string member_string, u64 address, int have_address){
     
     struct pdb_hash_table_entry *initial_type = pdb_hash_table_get(&pdb_context->type_table, type_name);
     if(!initial_type){
+        
+        initial_type = pdb_hash_table_get(&pdb_context->enum_table, type_name);
+        if(initial_type){
+            
+            u32 fieldlist_type_index = (u32)initial_type->rva_value_or_type_index;
+            struct codeview_record_header *fieldlist = pdb_get_record_for_type_index(pdb_context, fieldlist_type_index);
+            
+            if(!fieldlist || fieldlist->kind != 0x1203){
+                print("Type '%.*s' has invalid fieldlist.\n", type_name.size, type_name.data);
+                return;
+            }
+            
+            struct pdb_stream fieldlist_stream = {
+                .base = (void *)(fieldlist + 1),
+                .size = fieldlist->length - 2,
+            };
+            
+            int error = 0;
+            int found = 0;
+            
+            while(fieldlist_stream.current_offset < fieldlist_stream.size){
+                u16 field_kind     = pdb_read_type__failable(&fieldlist_stream, u16, &error);
+                /*u16 attributes = */pdb_read_type__failable(&fieldlist_stream, u16, &error); // C++ stuff
+                u64 value = pdb_read_numeric_leaf_as_u64(&fieldlist_stream, &error);
+                struct string name = pdb_read_zero_terminated_string(&fieldlist_stream);
+                
+                if(error || field_kind != /*LF_ENUMERATE*/0x1502 || !name.data){
+                    print("Fieldlist %x is invalid.\n", fieldlist_type_index);
+                    return;
+                }
+                
+                // Align the stream to a 4-byte boundary.
+                fieldlist_stream.current_offset = (fieldlist_stream.current_offset + 3) & ~3;
+                
+                int should_print = 0;
+                if(have_address){
+                    if(address == value){
+                        should_print = 1;
+                    }
+                }else{
+                    should_print = 1;
+                }
+                
+                if(should_print){
+                    print("    %.*s!%-50.*s 0x%llx (%llu)\n", type_name.size, type_name.data, name.size, name.data, value, value);
+                }
+            }
+            
+            if(have_address && !found){
+                print("Could not find an enum value for 0x%llx in %.*s\n", address, type_name.size, type_name.data);
+            }
+            
+            return;
+        }
+        
         print("Type '%.*s' was not found.\n", type_name.size, type_name.data);
         return;
     }
