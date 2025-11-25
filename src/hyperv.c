@@ -426,9 +426,14 @@ void hyperv_apply_local_apic_state(struct context *context){
         os_panic(1);
     }
     
+    local_apic.id_register[0] = registers->local_apic.id_register;
+    local_apic.version_register[0] = registers->local_apic.version_register;
+    
     local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
     local_apic.arbitration_priority_register[0] = registers->local_apic.arbitration_priority_register;
     local_apic.processor_priority_register[0] = registers->local_apic.processor_priority_register;
+    local_apic.end_of_interrupt_register[0] = registers->local_apic.end_of_interrupt_register    ;
+    local_apic.remote_read_register[0] = registers->local_apic.remote_read_register         ;
     local_apic.local_destination_register[0] = registers->local_apic.local_destination_register;
     local_apic.destination_format_register[0] = registers->local_apic.destination_format_register;
     local_apic.spurious_interrupt_vector_register[0] = registers->local_apic.spurious_interrupt_vector_register;
@@ -441,6 +446,9 @@ void hyperv_apply_local_apic_state(struct context *context){
     
     local_apic.error_status_register[0] = registers->local_apic.error_status_register;
     
+    local_apic.interrupt_command_register_0_31[0] = registers->local_apic.interrupt_command_register.low ;
+    local_apic.interrupt_command_register_32_63[0] = registers->local_apic.interrupt_command_register.high;
+    
     local_apic.local_vector_table_corrected_machine_check_interrupt_register[0] = registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register;
     local_apic.local_vector_table_timer_register[0] = registers->local_apic.local_vector_table.timer_register;
     local_apic.local_vector_table_thermal_sensor_register[0] = registers->local_apic.local_vector_table.thermal_sensor_register;
@@ -448,6 +456,10 @@ void hyperv_apply_local_apic_state(struct context *context){
     local_apic.local_vector_table_lint0_register[0] = registers->local_apic.local_vector_table.lint0_register;
     local_apic.local_vector_table_lint1_register[0] = registers->local_apic.local_vector_table.lint1_register;
     local_apic.local_vector_table_error_register[0] = registers->local_apic.local_vector_table.error_register;
+    
+    local_apic.timer_initial_count_register[0] = registers->local_apic.timer_initial_count_register;
+    local_apic.timer_current_count_register[0] = registers->local_apic.timer_current_count_register;
+    
     local_apic.timer_divide_configuration_register[0] = registers->local_apic.timer_divide_configuration_register;
     
     Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, 0, &local_apic, sizeof(local_apic));
@@ -967,9 +979,14 @@ void start_execution_hypervisor(struct context *context){
                     os_panic(1);
                 }
                 
+                registers->local_apic.id_register = local_apic.id_register[0];
+                registers->local_apic.version_register = local_apic.version_register[0];
+                
                 registers->local_apic.task_priority_register        = local_apic.task_priority_register[0];
                 registers->local_apic.arbitration_priority_register = local_apic.arbitration_priority_register[0];
                 registers->local_apic.processor_priority_register   = local_apic.processor_priority_register[0];
+                registers->local_apic.end_of_interrupt_register     = local_apic.end_of_interrupt_register[0];
+                registers->local_apic.remote_read_register          = local_apic.remote_read_register[0];
                 registers->local_apic.local_destination_register    = local_apic.local_destination_register[0];
                 registers->local_apic.destination_format_register   = local_apic.destination_format_register[0];
                 registers->local_apic.spurious_interrupt_vector_register = local_apic.spurious_interrupt_vector_register[0];
@@ -982,6 +999,9 @@ void start_execution_hypervisor(struct context *context){
                 
                 registers->local_apic.error_status_register = local_apic.error_status_register[0];
                 
+                registers->local_apic.interrupt_command_register.low  = local_apic.interrupt_command_register_0_31[0];
+                registers->local_apic.interrupt_command_register.high = local_apic.interrupt_command_register_32_63[0];
+                
                 registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register = local_apic.local_vector_table_corrected_machine_check_interrupt_register[0];
                 registers->local_apic.local_vector_table.timer_register = local_apic.local_vector_table_timer_register[0];
                 registers->local_apic.local_vector_table.thermal_sensor_register = local_apic.local_vector_table_thermal_sensor_register[0];
@@ -989,6 +1009,9 @@ void start_execution_hypervisor(struct context *context){
                 registers->local_apic.local_vector_table.lint0_register = local_apic.local_vector_table_lint0_register[0];
                 registers->local_apic.local_vector_table.lint1_register = local_apic.local_vector_table_lint1_register[0];
                 registers->local_apic.local_vector_table.error_register = local_apic.local_vector_table_error_register[0];
+                
+                registers->local_apic.timer_initial_count_register = local_apic.timer_initial_count_register[0];
+                registers->local_apic.timer_current_count_register = local_apic.timer_current_count_register[0];
                 registers->local_apic.timer_divide_configuration_register = local_apic.timer_divide_configuration_register[0];
                 
                 registers->local_apic.highest_pending_interrupt = apic__get_highest_set_bit(registers->local_apic.interrupt_request_register);
