@@ -101,6 +101,7 @@ struct interrupt_control{
 
 __declspec(dllimport) s32 WHvGetCapability(u32 CapabilityCode, void *CapabilityBuffer, u32 CapabilityBufferSizeInBytes, u32 *WrittenSizeInBytes);
 __declspec(dllimport) s32 WHvCreatePartition(HANDLE *Partition);
+__declspec(dllimport) s32 WHvDeletePartition(HANDLE Partition);
 __declspec(dllimport) s32 WHvGetPartitionProperty(HANDLE Partition, u32 PropertyCode, void *PropertyBuffer, u32 PropertyBufferSizeInBytes, u32 *SizeWrittenInBytes);
 __declspec(dllimport) s32 WHvSetPartitionProperty(HANDLE Partition, u32 PropertyCode, void *PropertyBuffer, u32 PropertyBufferSizeInBytes);
 
@@ -1141,8 +1142,8 @@ void start_execution_hypervisor(struct context *context){
                     u32 Value = (u32)IoPortAccessInfo->Rax & AccessBitMask;
                     
                     if(IoPortAccessInfo->PortNumber == /*reset*/0x433){
+                        
                         print("Reset!\n");
-                        handle_debugger(context);
                         
                         memset(&context->vmbus, 0, sizeof(context->vmbus));
                         memset(&context->registers, 0, sizeof(context->registers));
@@ -1160,7 +1161,14 @@ void start_execution_hypervisor(struct context *context){
                         registers->gs.base = registers->gs_base;
                         registers->fs.base = registers->fs_base;
                         
-                        handle_debugger(context);
+                        // Why do we need to delete and reallocate the partition? I dunno!
+                        s32 WHvDeletePartitionResult = WHvDeletePartition(context->Partition); // (I tried memsetting all physical memory instead, but it did not work)
+                        if(WHvDeletePartitionResult < 0){
+                            print("WHvDeletePartition failed with hresutl 0x%x\n", WHvDeletePartitionResult);
+                        }
+                        
+                        context->Partition = initialize_hypervisor(context);
+                        
                         continue;
                     }
                     
@@ -1554,7 +1562,6 @@ void start_execution_hypervisor(struct context *context){
                 helper_vmcall(context, registers);
                 if(registers->rip != ExitContext.VpContext.Rip){
                     // Vtl return or vtl call.
-                    hyperv_apply_local_apic_state(context);
                     continue;
                 }
             }break;
