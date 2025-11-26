@@ -206,11 +206,15 @@ void deliver_exception_or_interrupt(struct context *context, u32 vector_number, 
 void hypervisor_pend_interrupt(struct context *context, struct registers *registers, u32 vector_number);
 
 void pend_interrupt(struct context *context, struct registers *registers, u32 vector_number){
-    
+    (void)context;
+#ifndef _WIN32
+    // @incomplete: get rid of this for linux as well.
     if(context->use_hypervisor){
+        apic_pend_interrupt(registers, vector_number);
         hypervisor_pend_interrupt(context, registers, vector_number);
         return;
     }
+#endif
     
     // We don't call 'deliver_exception_or_interrupt' that should be done in check_for_interrupts.
     apic_pend_interrupt(registers, vector_number);

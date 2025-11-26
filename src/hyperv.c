@@ -287,58 +287,6 @@ HANDLE initialize_hypervisor(struct context *context){
     return Partition;
 }
 
-void hypervisor_pend_interrupt(struct context *context, struct registers *registers, u32 vector_number){
-    (void)registers;
-    
-    struct interrupt_control interrupt_control = {
-        .Type            = /*WHvX64InterruptTypeFixed*/0,
-        .DestinationMode = /*WHvX64InterruptDestinationModePhysical*/0,
-        .TriggerMode     = /*WHvX64InterruptTriggerModeEdge*/0, 
-        .Destination     = 0,
-        .Vector          = vector_number,
-    };
-    
-    s32 Result = WHvRequestInterrupt(context->Partition, &interrupt_control, sizeof(interrupt_control));
-    if(Result < 0){
-        print("[WHvRequestInterrupt] Failed with code 0x%x\n", Result);
-        os_panic(1);
-    }
-    
-    // :auto_eoi
-    // 
-    // If this synthetic interrupt source (SINT) has the auto eoi feature enabled,
-    // set the flag on the context and set a breakpoint on the vector.
-    // We will perform an EOI when we reach the vector.
-    // This is not a real solution, as there could be anther auto_eoi interrupt or something.
-    // It seems to work for now, so I will ignore all the problems with it for now.
-    //                                                                 - Pascal Beyer 28.02.2023
-    
-    int require_auto_eoi = 0;
-    
-    for(u32 index = 0; index < 16; index++){
-        u64 value = context->registers.hv_x64_msr_sint[index];
-        if(!(value & /*masked*/0x10000) && (value & /*auto-eoi*/0x20000) && (u8)value == vector_number){
-            require_auto_eoi = 1;
-        }
-    }
-    
-    if(require_auto_eoi) context->hypervisor_require_auto_eoi = 1;
-    
-    if(globals.single_stepping){
-        int should_send_interrupt = apic_interrupt_will_be_send(registers, vector_number);
-        if(should_send_interrupt){
-            hypervisor_clear_oneshot_breakpoint(registers, get_address_of_next_instruction(context, registers));
-            hypervisor_set_breakpoint_on_vector(context, registers, vector_number);
-        }
-    }
-    
-    if(require_auto_eoi){
-        // @note: Unconditionally set a breakpoint on the auto eoi interrupt.
-        //        We clear 'have_interrupt' in the handling code.
-        hypervisor_set_breakpoint_on_vector(context, registers, vector_number);
-    }
-}
-
 void hypervisor_perform_end_of_interrupt(struct context *context){
     
     // 
@@ -429,11 +377,12 @@ void hyperv_apply_local_apic_state(struct context *context){
     local_apic.id_register[0] = registers->local_apic.id_register;
     local_apic.version_register[0] = registers->local_apic.version_register;
     
-    local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
+    // local_apic.task_priority_register[0] = registers->local_apic.task_priority_register;
+    local_apic.task_priority_register[0] = (u32)(context->registers.cr8 & 0xf) << 4;
     local_apic.arbitration_priority_register[0] = registers->local_apic.arbitration_priority_register;
     local_apic.processor_priority_register[0] = registers->local_apic.processor_priority_register;
-    local_apic.end_of_interrupt_register[0] = registers->local_apic.end_of_interrupt_register    ;
-    local_apic.remote_read_register[0] = registers->local_apic.remote_read_register         ;
+    local_apic.end_of_interrupt_register[0] = registers->local_apic.end_of_interrupt_register;
+    local_apic.remote_read_register[0] = registers->local_apic.remote_read_register;
     local_apic.local_destination_register[0] = registers->local_apic.local_destination_register;
     local_apic.destination_format_register[0] = registers->local_apic.destination_format_register;
     local_apic.spurious_interrupt_vector_register[0] = registers->local_apic.spurious_interrupt_vector_register;
@@ -446,7 +395,7 @@ void hyperv_apply_local_apic_state(struct context *context){
     
     local_apic.error_status_register[0] = registers->local_apic.error_status_register;
     
-    local_apic.interrupt_command_register_0_31[0] = registers->local_apic.interrupt_command_register.low ;
+    local_apic.interrupt_command_register_0_31[0] = registers->local_apic.interrupt_command_register.low;
     local_apic.interrupt_command_register_32_63[0] = registers->local_apic.interrupt_command_register.high;
     
     local_apic.local_vector_table_corrected_machine_check_interrupt_register[0] = registers->local_apic.local_vector_table.corrected_machine_check_interrupt_register;
@@ -586,8 +535,6 @@ void start_execution_hypervisor(struct context *context){
         os_panic(1);
     }
     
-    hyperv_apply_local_apic_state(context);
-    
     registers->dr7 |= (1 << 13); // General Detect Enable. Causes a debug Exception on any attempt at accessing dr0-dr7.
     registers->dr6 &= ~(1 << 13); // Clear the Debug register Access detected bit.
     registers->dr6 &= ~0xf; // Clear the "Condition Detected" bits.
@@ -707,6 +654,10 @@ void start_execution_hypervisor(struct context *context){
             print("[WHvSetVirtualProcessorXsaveState] failed with result 0x%x\n", Result);
             os_panic(1);
         }
+        
+        // @cleanup: auto-eoi.
+        hyperv_apply_local_apic_state(context);
+        
         
         struct{
             u32 ExitReason;

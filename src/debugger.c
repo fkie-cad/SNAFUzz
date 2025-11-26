@@ -372,7 +372,7 @@ u64 get_address_of_next_instruction(struct context *context, struct registers *r
         case 0x101:{
             switch(decoded_instruction.modrm){
                 case 0xd9: case 0xc1:{
-                    if(registers->rcx == 0x11){
+                    if(registers->rcx == 0x11 || registers->rcx == 0x12){
                         next_rip = registers->vtl_state.rip;
                     }
                 }break;
