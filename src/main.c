@@ -184,6 +184,8 @@ __declspec(dllimport) u32 IsDebuggerPresent(void);
 
 __declspec(dllimport) u64   VirtualQuery(void *lpAddress, void *memory_information, u64 size);
 __declspec(dllimport) void *VirtualAlloc(void *lpAddress, u64 dwSize, u32 flAllocationType, u32 flProtect);
+__declspec(dllimport) int   VirtualFree(void *lpAddress, u64 dwSize, u32 dwFreeType);
+
 __declspec(dllimport) int   VirtualProtect(void *lpAddress, u64 dwSize, u32 flNewProtect, u32 *lpflOldProtect);
 __declspec(dllimport) HANDLE CreateThread(void *lpThreadAttributes, u64 dwStackSize, u32 (*lpStartAddress)(void *), void *lpParameter, u32 dwCreationFlags, u32 *lpThreadId);
 __declspec(dllimport) int TerminateThread(HANDLE hThread, u32 dwExitCode);

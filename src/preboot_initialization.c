@@ -155,6 +155,13 @@ int efi_setup_initial_state(struct context *context){
     u64 memory_size =  4ull * 1024ull * 1024ull * 1024ull;
     u64 page_bitmap_size = (memory_size / 0x1000) / 8;
     
+    if(globals.snapshot.physical_memory){
+        // On reset, for now we free and reallocate...
+        VirtualFree(context->physical_memory,          0, /*MEM_RELEASE*/0x8000);
+        VirtualFree(context->physical_memory_copied,   0, /*MEM_RELEASE*/0x8000);
+        VirtualFree(context->physical_memory_executed, 0, /*MEM_RELEASE*/0x8000);
+    }
+    
     context->physical_memory_size      = memory_size;
     context->physical_memory           = os_allocate_memory(memory_size);
     context->physical_memory_copied    = os_allocate_memory(page_bitmap_size);
