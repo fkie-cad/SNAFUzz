@@ -503,8 +503,11 @@ struct context{
         struct vmbus_channel *keyboard;
         struct vmbus_channel *mouse;
         
-        u32 channel_offer_at;
         int send_packet_skip_interrupt;
+        
+        u64 pending_message_reserved;
+        u64 pending_message_send;
+        struct hv_message *pending_messages[16]; // 16 ought to be enough for everybody!
     } vmbus;
 };
 

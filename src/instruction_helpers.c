@@ -2357,7 +2357,7 @@ void helper_wrmsr(struct context *context, struct registers *registers){
         }break;
         
         case HV_X64_MSR_EOM:{
-            vmbus_offer_channel(context);
+            vmbus_handle_end_of_message(context);
         }break;
         case HV_X64_MSR_STIMER0_CONFIG:{
             

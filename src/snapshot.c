@@ -157,11 +157,10 @@ int load_snapshot(struct context *context, char *file_name){
         u64 amount_of_gpadls   = vmbus_section_start[1];
         u64 monitor_page1      = vmbus_section_start[2];
         u64 monitor_page2      = vmbus_section_start[3];
-        u64 channel_offer_at   = vmbus_section_start[4];
+        u64 pending_messages   = vmbus_section_start[4];
         
         context->vmbus.monitor_page1 = monitor_page1;
         context->vmbus.monitor_page2 = monitor_page2;
-        context->vmbus.channel_offer_at = (u32)channel_offer_at;
         
         u32 *at = (u32 *)(vmbus_section_start + 5);
         
@@ -200,7 +199,16 @@ int load_snapshot(struct context *context, char *file_name){
             context->vmbus.gpadls = gpadl;
         }
         
-        assert((void *)pages_at == (void *)(file.memory + directory[1].end_offset));
+        u8 *message_at = (u8 *)pages_at;
+        for(u32 index = 0; index < pending_messages; index++){
+            struct hv_message *message = (void *)message_at;
+            context->vmbus.pending_messages[index] = message;
+            
+            message_at += sizeof(*message) + message->payload_size;
+        }
+        context->vmbus.pending_message_reserved = pending_messages;
+        
+        assert((void *)message_at == (void *)(file.memory + directory[1].end_offset));
         
         // 
         // Initialize the 'read_buffer' and 'send_buffer' for each channel.
@@ -361,6 +369,7 @@ void write_snapshot(struct context *context, char *file_name){
     u64 amount_of_gpadls   = 0;
     u64 amount_of_channels = 0;
     u64 amount_of_gpadl_pages = 0;
+    u64 pending_messages_size = 0;
     
     for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
         amount_of_channels += 1;
@@ -369,6 +378,11 @@ void write_snapshot(struct context *context, char *file_name){
     for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
         amount_of_gpadls += 1;
         amount_of_gpadl_pages += gpadl->amount_of_pages;
+    }
+    
+    for(u64 pending_message = context->vmbus.pending_message_send; pending_message < context->vmbus.pending_message_reserved; pending_message += 1){
+        struct hv_message *message = context->vmbus.pending_messages[pending_message % array_count(context->vmbus.pending_messages)];
+        pending_messages_size += sizeof(*message) + message->payload_size;
     }
     
     // 
@@ -400,7 +414,8 @@ void write_snapshot(struct context *context, char *file_name){
             /*channels*/amount_of_channels * 6 * sizeof(u32) + 
             /*gpadls*/amount_of_gpadls * 3 * sizeof(u32) + 
             /*alignment*/(amount_of_gpadls & 1) * sizeof(u32) + 
-            /*gpadl_pages*/amount_of_gpadl_pages * sizeof(u64);
+            /*gpadl_pages*/amount_of_gpadl_pages * sizeof(u64) + 
+            pending_messages_size;
     
     u64 registers_size = sizeof(struct registers);
     
@@ -495,13 +510,13 @@ void write_snapshot(struct context *context, char *file_name){
         u64 amount_of_gpadls;
         u64 monitor_page1;
         u64 monitor_page2;
-        u64 channel_offer_at;
+        u64 amount_of_pending_messages;
     } vmbus_header = {
         .amount_of_channels = amount_of_channels,
         .amount_of_gpadls   = amount_of_gpadls,
         .monitor_page1 = context->vmbus.monitor_page1,
         .monitor_page2 = context->vmbus.monitor_page2,
-        .channel_offer_at = context->vmbus.channel_offer_at,
+        .amount_of_pending_messages = context->vmbus.pending_message_reserved - context->vmbus.pending_message_send,
     };
     fwrite(&vmbus_header, sizeof(vmbus_header), 1, file);
     
@@ -544,6 +559,11 @@ void write_snapshot(struct context *context, char *file_name){
     
     for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
         fwrite(gpadl->pages, sizeof(u64), gpadl->amount_of_pages, file);
+    }
+    
+    for(u64 pending_message = context->vmbus.pending_message_send; pending_message < context->vmbus.pending_message_reserved; pending_message += 1){
+        struct hv_message *message = context->vmbus.pending_messages[pending_message % array_count(context->vmbus.pending_messages)];
+        fwrite(message, sizeof(*message) + message->payload_size, 1, file);
     }
     
     assert((u64)ftell64(file) == directory[1].end_offset);

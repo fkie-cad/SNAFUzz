@@ -69,33 +69,50 @@ static char *vmbus_packet_types[] = {
     [0xd] = "VM_PKT_ADDITIONAL_DATA",
 };
 
-void sint_post_message(struct context *context, u32 synthetic_interrupt_number, u32 message_type, u8 message_flags, void *payload, u8 payload_size){
+struct hv_message{
+    u32 message_type;
+    u8  payload_size;
+    u8  message_flags;
+    u16 reserved;
+    
+    u64 sender_identifier;
+    
+    u8 payload[];
+};
+
+void sint_post_message(struct context *context, u32 synthetic_interrupt_number, u32 message_type, void *payload, u8 payload_size){
     
     struct registers *registers = &context->registers;
     
-    if(!(registers->hv_x64_msr_simp & 1)) return;
+    if(!(registers->hv_x64_msr_simp & 1)){
+        print(__FUNCTION__": not simp\n");
+        return;
+    }
     
     u8 *message_page = get_physical_memory_for_write(context, registers->hv_x64_msr_simp & ~0xfff);
     
-    struct {
-        u32 message_type;
-        u8  payload_size;
-        u8  message_flags;
-        u16 reserved;
+    struct hv_message *message = (void *)(message_page + 0x100 * synthetic_interrupt_number);
+    
+    if(message->message_type == /*HvMessageTypeNone*/0){
+        message->message_type  = message_type;
+        message->message_flags = 0;
+        message->payload_size  = payload_size;
+        memcpy(message->payload, payload, payload_size);
         
-        u64 sender_identifier;
+        u64 synthetic_interrupt_configuration = registers->hv_x64_msr_sint[synthetic_interrupt_number];
         
-        u8 payload[];
-    } *message = (void *)(message_page + 0x100 * synthetic_interrupt_number);
-    
-    message->message_type  = message_type;
-    message->message_flags = message_flags;
-    message->payload_size  = payload_size;
-    memcpy(message->payload, payload, payload_size);
-    
-    u64 synthetic_interrupt_configuration = registers->hv_x64_msr_sint[synthetic_interrupt_number];
-    
-    pend_interrupt(context, registers, synthetic_interrupt_configuration & 0xff);
+        pend_interrupt(context, registers, synthetic_interrupt_configuration & 0xff);
+    }else{
+        message->message_flags |= /*MessagePending*/1;
+        
+        message = (void *)push_data(&context->permanent_arena, u8, sizeof(*message) + payload_size); // @cleanup: Use malloc?
+        message->message_type  = message_type;
+        message->message_flags = 0;
+        message->payload_size  = payload_size;
+        memcpy(message->payload, payload, payload_size);
+        
+        context->vmbus.pending_messages[context->vmbus.pending_message_reserved++ % array_count(context->vmbus.pending_messages)] = message;
+    }
 }
 
 // @cleanup: For now this assumes that there is only one packet to read.
@@ -226,7 +243,7 @@ void vmbus_send_packet(struct context *context, struct vmbus_channel *channel, s
     *(u32 *)(siefp + /*VMBUS_SINT*/2 * 0x100) |= flag;
     
     if(!context->vmbus.send_packet_skip_interrupt){
-        sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_NONE*/0, 0, null, 0);
+        sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_NONE*/0, null, 0);
     }
 }
 
@@ -289,126 +306,26 @@ enum vmbus_device_kind vmbus_interface_type_id_to_device_type(struct guid device
     return vmbus_device_kind;
 }
 
-void vmbus_offer_channel(struct context *context){
+void vmbus_handle_end_of_message(struct context *context){
+    print("vmbus_handle_end_of_message!\n");
     
-    if(context->vmbus.channel_offer_at == (u32)-1) return;
-    
-    static struct {
-        u8  monitor_id;
-        u8  monitor_allocated;
-        u16 channel_flags;
-        u32 connection_id;
-        struct guid interface_type_guid;
-        struct guid interface_instance_guid;
-    } vmbus_channels[] = { // @WARNING: order needs to match 'vmbus_device_kind'.
-        {
-            .monitor_id  = 0xff,
-            .monitor_allocated = 0,
-            .connection_id = 0x2001,
-            .interface_type_guid = HV_SCSI_GUID,
-            .interface_instance_guid = {0xfec9c10e, 0x93fb, 0x4005, {0xbb, 0x8c, 0x22, 0x40, 0x24, 0x0f, 0xaf, 0xb7}},
-        },
+    if(context->vmbus.pending_message_send < context->vmbus.pending_message_reserved){
+        struct hv_message *pending_message = context->vmbus.pending_messages[context->vmbus.pending_message_send++ % array_count(context->vmbus.pending_messages)];
         
-        {
-            .monitor_id  = 0xff,
-            .monitor_allocated = 0,
-            .channel_flags = /*NAMED_PIPE_MODE*/0x10,
-            .connection_id = 0x2002,
-            .interface_type_guid = HV_MOUSE_GUID,
-            .interface_instance_guid = {0x58f75a6d, 0xd949, 0x4320, {0x99, 0xe1, 0xa2, 0xa2, 0x57, 0x6d, 0x58, 0x1c}},
-        },
+        u32 synthetic_interrupt_number = /*VMBUS_SINT*/2; // @cleanup: Where should this come from?
         
-        {
-            .monitor_id  = 0xff,
-            .monitor_allocated = 0,
-            .channel_flags = 0,
-            .connection_id = 0x2003,
-            .interface_type_guid = HV_KBD_GUID,
-            .interface_instance_guid = {0xd34b2567, 0xb9b6, 0x42b9, {0x87, 0x78, 0x0a, 0x4e, 0xc0, 0xb9, 0x55, 0xbf}},
-        },
+        u8 *message_page = get_physical_memory_for_write(context, context->registers.hv_x64_msr_simp & ~0xfff);
+        struct hv_message *message = (void *)(message_page + 0x100 * synthetic_interrupt_number);
         
-        {
-            .monitor_id  = 0xff,
-            .monitor_allocated = 0,
-            .channel_flags = /*NAMED_PIPE_MODE*/0x10,
-            .connection_id = 0x2004,
-            .interface_type_guid = HV_SYNVID_GUID,
-            .interface_instance_guid = {0x5620e0c7, 0x8062, 0x4dce, {0xae, 0xb7, 0x52, 0x0c, 0x7e, 0xf7, 0x61, 0x71}},
-        },
-    };
-    
-    
-    if(context->vmbus.channel_offer_at == array_count(vmbus_channels)){
-        u64 message_type = /*VMBUS_MSG_ALLOFFERS_DELIVERED*/4;
+        memcpy(message, pending_message, sizeof(*pending_message) + pending_message->payload_size);
         
-        if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("["__FUNCTION__"] VMBUS_MSG_ALLOFFERS_DELIVERED\n");
+        if(context->vmbus.pending_message_send < context->vmbus.pending_message_reserved){
+            message->message_flags |= /*MessagePending*/1;
+        }
         
-        sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &message_type, sizeof(message_type));
-        context->vmbus.channel_offer_at = (u32)-1;
-        
-        return;
+        u64 synthetic_interrupt_configuration = context->registers.hv_x64_msr_sint[synthetic_interrupt_number];
+        pend_interrupt(context, &context->registers, synthetic_interrupt_configuration & 0xff);
     }
-    
-    u32 at = context->vmbus.channel_offer_at++;
-    
-    struct{
-        u64 message_type;
-        
-        struct guid interface_type_guid;
-        struct guid interface_instance_guid;
-        u64 reserved1;
-        u64 reserved2;
-        
-        u16 channel_flags;
-        u16 mmio_megabytes;
-        
-        u32 pipe_mode;
-        u8 user_bytes[116];
-        
-        u16 sub_channel_index;
-        u16 reserved3;
-        
-        u32 channel_id;
-        u8  monitor_id;
-        
-        u8 monitor_allocated;
-        u16 is_dedicated_interrupt;
-        
-        u32 connection_id;
-    } offer_channel_message = {
-        .message_type = /*VMBUS_MSG_OFFERCHANNEL*/1,
-        
-        .interface_type_guid     = vmbus_channels[at].interface_type_guid,
-        .interface_instance_guid = vmbus_channels[at].interface_instance_guid,
-        .channel_id             = at + 1,
-        .channel_flags           = vmbus_channels[at].channel_flags,
-        .monitor_id              = vmbus_channels[at].monitor_id,
-        .monitor_allocated       = vmbus_channels[at].monitor_allocated,
-        .is_dedicated_interrupt  = 1,
-        .connection_id           = vmbus_channels[at].connection_id,
-    };
-    
-    
-    if(vmbus_channels[at].interface_type_guid.Data1 == 0xda0a7802){
-        offer_channel_message.mmio_megabytes = 8;
-    }
-    
-    if(offer_channel_message.channel_flags & /*NAMED_PIPE_MODE*/0x10){
-        offer_channel_message.pipe_mode = 4;
-    }
-    
-    sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 1, &offer_channel_message, sizeof(offer_channel_message) - /*padding*/4);
-    
-    struct vmbus_channel *channel = push_struct(&context->permanent_arena, struct vmbus_channel);
-    channel->device_kind = at + 1;
-    channel->channel_id  = offer_channel_message.channel_id;
-    channel->monitor_id  = offer_channel_message.monitor_id;
-    channel->connection_id = offer_channel_message.connection_id;
-    
-    channel->next = context->vmbus.channels;
-    context->vmbus.channels = channel;
-    
-    if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("["__FUNCTION__"] DeviceKind %s (%x)\n", vmbus_device_kind_string[channel->device_kind], channel->device_kind);
 }
 
 void vmbus_channel_initialize_ringbuffers(struct vmbus_channel *channel, struct gpadl *gpadl){
@@ -495,7 +412,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("[" __FUNCTION__ "] Received VMBUS_MSG_INITIATE_CONTACT with version 0x%x sending supported %d\n", message->initiate_contact.vmbus_version_requested, version_response_message.version_supported);
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &version_response_message, sizeof(version_response_message));
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &version_response_message, sizeof(version_response_message));
         }break;
         
         case /*VMBUS_MSG_REQUESTOFFERS*/3:{
@@ -503,7 +420,117 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("[" __FUNCTION__ "] Received VMBUS_MSG_REQUESTOFFERS\n");
             
-            vmbus_offer_channel(context);
+            
+            static struct {
+                u8  monitor_id;
+                u8  monitor_allocated;
+                u16 channel_flags;
+                u32 connection_id;
+                struct guid interface_type_guid;
+                struct guid interface_instance_guid;
+            } vmbus_channels[] = { // @WARNING: order needs to match 'vmbus_device_kind'.
+                {
+                    .monitor_id  = 0xff,
+                    .monitor_allocated = 0,
+                    .connection_id = 0x2001,
+                    .interface_type_guid = HV_SCSI_GUID,
+                    .interface_instance_guid = {0xfec9c10e, 0x93fb, 0x4005, {0xbb, 0x8c, 0x22, 0x40, 0x24, 0x0f, 0xaf, 0xb7}},
+                },
+                
+                {
+                    .monitor_id  = 0xff,
+                    .monitor_allocated = 0,
+                    .channel_flags = /*NAMED_PIPE_MODE*/0x10,
+                    .connection_id = 0x2002,
+                    .interface_type_guid = HV_MOUSE_GUID,
+                    .interface_instance_guid = {0x58f75a6d, 0xd949, 0x4320, {0x99, 0xe1, 0xa2, 0xa2, 0x57, 0x6d, 0x58, 0x1c}},
+                },
+                
+                {
+                    .monitor_id  = 0xff,
+                    .monitor_allocated = 0,
+                    .channel_flags = 0,
+                    .connection_id = 0x2003,
+                    .interface_type_guid = HV_KBD_GUID,
+                    .interface_instance_guid = {0xd34b2567, 0xb9b6, 0x42b9, {0x87, 0x78, 0x0a, 0x4e, 0xc0, 0xb9, 0x55, 0xbf}},
+                },
+                
+                {
+                    .monitor_id  = 0xff,
+                    .monitor_allocated = 0,
+                    .channel_flags = /*NAMED_PIPE_MODE*/0x10,
+                    .connection_id = 0x2004,
+                    .interface_type_guid = HV_SYNVID_GUID,
+                    .interface_instance_guid = {0x5620e0c7, 0x8062, 0x4dce, {0xae, 0xb7, 0x52, 0x0c, 0x7e, 0xf7, 0x61, 0x71}},
+                },
+            };
+            
+            for(u32 at = 0; at < array_count(vmbus_channels); at++){
+                
+                struct{
+                    u64 message_type;
+                    
+                    struct guid interface_type_guid;
+                    struct guid interface_instance_guid;
+                    u64 reserved1;
+                    u64 reserved2;
+                    
+                    u16 channel_flags;
+                    u16 mmio_megabytes;
+                    
+                    u32 pipe_mode;
+                    u8 user_bytes[116];
+                    
+                    u16 sub_channel_index;
+                    u16 reserved3;
+                    
+                    u32 channel_id;
+                    u8  monitor_id;
+                    
+                    u8 monitor_allocated;
+                    u16 is_dedicated_interrupt;
+                    
+                    u32 connection_id;
+                } offer_channel_message = {
+                    .message_type = /*VMBUS_MSG_OFFERCHANNEL*/1,
+                    
+                    .interface_type_guid     = vmbus_channels[at].interface_type_guid,
+                    .interface_instance_guid = vmbus_channels[at].interface_instance_guid,
+                    .channel_id             = at + 1,
+                    .channel_flags           = vmbus_channels[at].channel_flags,
+                    .monitor_id              = vmbus_channels[at].monitor_id,
+                    .monitor_allocated       = vmbus_channels[at].monitor_allocated,
+                    .is_dedicated_interrupt  = 1,
+                    .connection_id           = vmbus_channels[at].connection_id,
+                };
+                
+                if(vmbus_channels[at].interface_type_guid.Data1 == 0xda0a7802){
+                    offer_channel_message.mmio_megabytes = 8;
+                }
+                
+                if(offer_channel_message.channel_flags & /*NAMED_PIPE_MODE*/0x10){
+                    offer_channel_message.pipe_mode = 4;
+                }
+                
+                sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &offer_channel_message, sizeof(offer_channel_message) - /*padding*/4);
+                
+                struct vmbus_channel *channel = push_struct(&context->permanent_arena, struct vmbus_channel);
+                channel->device_kind = at + 1;
+                channel->channel_id  = offer_channel_message.channel_id;
+                channel->monitor_id  = offer_channel_message.monitor_id;
+                channel->connection_id = offer_channel_message.connection_id;
+                
+                channel->next = context->vmbus.channels;
+                context->vmbus.channels = channel;
+                
+                if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("["__FUNCTION__"] DeviceKind %s (%x)\n", vmbus_device_kind_string[channel->device_kind], channel->device_kind);
+            }
+            
+            u64 message_type = /*VMBUS_MSG_ALLOFFERS_DELIVERED*/4;
+            
+            if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("["__FUNCTION__"] VMBUS_MSG_ALLOFFERS_DELIVERED\n");
+            
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_type, sizeof(message_type));
         }break;
         
         case /*VMBUS_MSG_CREATE_GPADL*/8:{
@@ -556,7 +583,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .gpadl_id = message->gpadl_header.gpadl_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &gpadl_created, sizeof(gpadl_created));
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &gpadl_created, sizeof(gpadl_created));
             
             if(gpadl->next && gpadl->next->next == null && context->use_hypervisor){
                 // :vmbus_tsc_frequency_hack
@@ -631,7 +658,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .open_id = message->open_channel.open_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &open_channel_result, sizeof(open_channel_result));
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &open_channel_result, sizeof(open_channel_result));
             
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     >>> %s\n", vmbus_device_kind_string[channel->device_kind]);
             if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
@@ -655,7 +682,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .gpadl_id = message->teardown.gpadl_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, 0, &message_gpadl_torndown, sizeof(message_gpadl_torndown));
+            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_gpadl_torndown, sizeof(message_gpadl_torndown));
         }break;
         
         default:{
