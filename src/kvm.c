@@ -370,7 +370,7 @@ void start_execution_hypervisor(struct context *context){
         // through the `KVM_IRQFD_FLAG_RESAMPLE` flag of `KVM_IRQFD`.
         // This fd seems to be signaled both, on EOI and on EOM. 
         // Hence, we could do some message counting to figure out when an eom 
-        // is expected and then call `vmbus_offer_channel`. 
+        // is expected and then call `vmbus_handle_end_of_message`. 
         // But since it works now using aeois I guess i am happy for now.
         // 
         
@@ -1230,7 +1230,7 @@ void start_execution_hypervisor(struct context *context){
                 u64 msr_input_value = kvm_run->msr.data;
                 
                 if(msr_number == HV_X64_MSR_EOM){
-                    vmbus_offer_channel(context); // :AEOI_on_linux
+                    vmbus_handle_end_of_message(context); // :AEOI_on_linux
                 }else{
                     helper_wrmsr(context, registers);
                 }

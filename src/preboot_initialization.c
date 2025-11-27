@@ -157,9 +157,15 @@ int efi_setup_initial_state(struct context *context){
     
     if(globals.snapshot.physical_memory){
         // On reset, for now we free and reallocate...
+#ifdef _WIN32
         VirtualFree(context->physical_memory,          0, /*MEM_RELEASE*/0x8000);
         VirtualFree(context->physical_memory_copied,   0, /*MEM_RELEASE*/0x8000);
         VirtualFree(context->physical_memory_executed, 0, /*MEM_RELEASE*/0x8000);
+#else
+        munmap(context->physical_memory,          memory_size);
+        munmap(context->physical_memory_copied,   page_bitmap_size);
+        munmap(context->physical_memory_executed, page_bitmap_size);
+#endif
     }
     
     context->physical_memory_size      = memory_size;

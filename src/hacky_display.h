@@ -16,7 +16,7 @@ HACKY_EXTERN volatile int snapshot_mode_currently_in_debugger;
 
 HACKY_EXTERN struct hacky_event{
     enum hacky_event_kind{
-        HACKY_EVENT_key_none,
+        HACKY_EVENT_none,
         
         HACKY_EVENT_key_event,
         HACKY_EVENT_mouse_event,
