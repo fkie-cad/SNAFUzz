@@ -2209,7 +2209,6 @@ void helper_rdmsr(struct context *context, struct registers *registers){
         default:{
             if(globals.debugger_mode){
                 print("***** Unhandled rdmsr 0x%x\n", (u32)registers->rcx);
-                handle_debugger(context);
             }else{
                 set_crash_information(context, CRASH_internal_error, (u64)"Unimplmented msr.");
             }
@@ -2588,7 +2587,6 @@ void helper_wrmsr(struct context *context, struct registers *registers){
         default:{
             if(globals.debugger_mode){
                 print("***** Unhandled wrmsr 0x%x <- 0x%llx\n", (u32)registers->rcx, value);
-                handle_debugger(context);
             }else{
                 set_crash_information(context, CRASH_internal_error, (u64)"Unimplemented msr.");
             }

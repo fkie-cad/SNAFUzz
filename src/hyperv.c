@@ -1141,7 +1141,7 @@ void start_execution_hypervisor(struct context *context){
                     u32 AccessBitMask = (u32)((1ull << AccessSizeBits) - 1); // @note: Do the shift in 64-bits, otherwise shifting by 32 is undefined.
                     u32 Value = (u32)IoPortAccessInfo->Rax & AccessBitMask;
                     
-                    if(IoPortAccessInfo->PortNumber == /*reset*/0x433){
+                    if(IoPortAccessInfo->PortNumber == /*reset/reboot*/0x433){
                         
                         print("Reset!\n");
                         
@@ -1149,6 +1149,7 @@ void start_execution_hypervisor(struct context *context){
                         memset(&context->registers, 0, sizeof(context->registers));
                         invalidate_translate_lookaside_buffers(context);
                         efi_setup_initial_state(context);
+                        
                         
                         // @note: We fix up the descriptors here as the jit does not care about anything but the selector.
                         registers->cs = parse_segment_from_global_descriptor_table(context, registers->gdt_base, registers->cs.selector);
@@ -1203,36 +1204,7 @@ void start_execution_hypervisor(struct context *context){
                     u64 msr_input_value = (MsrAccess->Rdx << 32) | (u32)MsrAccess->Rax;
                     
                     switch(MsrAccess->MsrNumber){
-                        
-                        case /*IA32_APIC_BASE*/0x1b: // This will only be allowed if msr_input_value == registers->ia32_msr_base. Not sure why they do that sometimes...
-                        
-                        case /*HV_X64_MSR_GUEST_OS_ID*/0x40000000:
-                        case /*HV_X64_MSR_HYPERCALL*/0x40000001:
-                        case /*HV_X64_MSR_VP_ASSIST*/0x40000073:
-                        case HV_X64_MSR_REFERENCE_TSC:
-                        
-                        case HV_X64_MSR_SCONTROL:
-                        case HV_X64_MSR_SVERSION:
-                        
-                        case HV_X64_MSR_SINT0:
-                        case HV_X64_MSR_SINT1:
-                        case HV_X64_MSR_SINT2:
-                        case HV_X64_MSR_SINT3:
-                        case HV_X64_MSR_SINT4:
-                        case HV_X64_MSR_SINT5:
-                        case HV_X64_MSR_SINT6:
-                        case HV_X64_MSR_SINT7:
-                        case HV_X64_MSR_SINT8:
-                        case HV_X64_MSR_SINT9:
-                        case HV_X64_MSR_SINT10:
-                        case HV_X64_MSR_SINT11:
-                        case HV_X64_MSR_SINT12:
-                        case HV_X64_MSR_SINT13:
-                        case HV_X64_MSR_SINT14:
-                        case HV_X64_MSR_SINT15:
-                        
-                        case HV_X64_MSR_SIEFP:
-                        case HV_X64_MSR_SIMP:{
+                        default:{
                             // 
                             // These are _simple_ msrs (they dont touch interrupts), just handle them _normally_.
                             // 
@@ -1259,15 +1231,16 @@ void start_execution_hypervisor(struct context *context){
                         case HV_X64_MSR_EOM:{
                             helper_wrmsr(context, registers);
                         }break;
-                        
-                        default:{
-                            print("hypervisor: Unhandled wrmsr %x\n", MsrAccess->MsrNumber);
-                            handle_debugger(context);
-                        }break;
                     }
                 }else{
                     
                     switch(MsrAccess->MsrNumber){
+                        
+                        default:{
+                            helper_rdmsr(context, registers);
+                        }break;
+                        
+                        
                         case BIOS_break:{
                             print("Bios breakpoint\n");
                             handle_debugger(context);
@@ -1277,50 +1250,6 @@ void start_execution_hypervisor(struct context *context){
                             print("Bios Crashed!!\n");
                             handle_debugger(context);
                             os_panic(1);
-                        }break;
-                        
-                        case BIOS_log:
-                        case BIOS_disk_read:
-                        case BIOS_disk_write:
-                        case BIOS_read_key:
-                        
-                        case IA32_TSC:
-                        case /*MSR_IA32_PLATFORM_ID*/0x17:
-                        case /*MSR_POWER_CTL*/0x1fc:
-                        case 0xc0010010:
-                        
-                        case HV_X64_MSR_SCONTROL:
-                        case HV_X64_MSR_SVERSION:
-                        
-                        case HV_X64_MSR_SIEFP:
-                        case HV_X64_MSR_SIMP:
-                        case HV_X64_MSR_SINT0:
-                        case HV_X64_MSR_SINT1:
-                        case HV_X64_MSR_SINT2:
-                        case HV_X64_MSR_SINT3:
-                        case HV_X64_MSR_SINT4:
-                        case HV_X64_MSR_SINT5:
-                        case HV_X64_MSR_SINT6:
-                        case HV_X64_MSR_SINT7:
-                        case HV_X64_MSR_SINT8:
-                        case HV_X64_MSR_SINT9:
-                        case HV_X64_MSR_SINT10:
-                        case HV_X64_MSR_SINT11:
-                        case HV_X64_MSR_SINT12:
-                        case HV_X64_MSR_SINT13:
-                        case HV_X64_MSR_SINT14:
-                        case HV_X64_MSR_SINT15:
-                        
-                        case HV_X64_MSR_STIMER0_CONFIG:
-                        case HV_X64_MSR_STIMER0_COUNT:
-                        
-                        case /*HV_X64_MSR_VP_INDEX*/0x40000002:
-                        case HV_X64_MSR_REFERENCE_TSC:
-                        case /*HV_X64_MSR_HYPERCALL*/0x40000001:
-                        case HV_X64_MSR_TSC_FREQUENCY:
-                        case HV_X64_MSR_APIC_FREQUENCY:
-                        case HV_X64_MSR_TIME_REF_COUNT:{
-                            helper_rdmsr(context, registers);
                         }break;
                         
                         case HV_X64_MSR_GUEST_IDLE:{
@@ -1354,11 +1283,6 @@ void start_execution_hypervisor(struct context *context){
                             }else{
                                 context->next_timer_interrupt_time_or_zero = time_reference_counter + registers->hv_x64_msr_stimer0_count;
                             }
-                        }break;
-                        
-                        default:{
-                            print("hypervisor: Unhandled rdmsr %x\n", MsrAccess->MsrNumber);
-                            handle_debugger(context);
                         }break;
                     }
                 }
