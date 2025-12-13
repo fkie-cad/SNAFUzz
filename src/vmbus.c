@@ -84,10 +84,7 @@ void sint_post_message(struct context *context, u32 synthetic_interrupt_number, 
     
     struct registers *registers = &context->registers;
     
-    if(!(registers->hv_x64_msr_simp & 1)){
-        print(__FUNCTION__": not simp\n");
-        return;
-    }
+    if(!(registers->hv_x64_msr_simp & 1)) return;
     
     u8 *message_page = get_physical_memory_for_write(context, registers->hv_x64_msr_simp & ~0xfff);
     
@@ -307,8 +304,7 @@ enum vmbus_device_kind vmbus_interface_type_id_to_device_type(struct guid device
 }
 
 void vmbus_handle_end_of_message(struct context *context){
-    print("vmbus_handle_end_of_message!\n");
-    
+
     if(context->vmbus.pending_message_send < context->vmbus.pending_message_reserved){
         struct hv_message *pending_message = context->vmbus.pending_messages[context->vmbus.pending_message_send++ % array_count(context->vmbus.pending_messages)];
         

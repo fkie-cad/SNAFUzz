@@ -931,7 +931,7 @@ void start_execution_hypervisor(struct context *context){
                     os_panic(1);
                 }
                 
-                registers->local_apic.id_register = local_apic.id_register[0];
+                // registers->local_apic.id_register = local_apic.id_register[0]; // Because we are currently emulating multiple cores with one core, this would get reset...
                 registers->local_apic.version_register = local_apic.version_register[0];
                 
                 registers->local_apic.task_priority_register        = local_apic.task_priority_register[0];
@@ -1544,7 +1544,7 @@ void start_execution_hypervisor(struct context *context){
         }
         
         // We should not change the `register->rip` anywhere and still end up in this _default_ case.
-        assert(ExitContext.VpContext.Rip == registers->rip);
+        assert(!instruction_length || ExitContext.VpContext.Rip == registers->rip);
         registers->rip += instruction_length;
         
         registers->RF = 0; // Disable the Resume Flag, as we have handled this instruction. Intel seems to do this for us, AMD does not.
