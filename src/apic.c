@@ -93,6 +93,25 @@ struct serialized_local_apic{
 
 static_assert(sizeof(struct serialized_local_apic) == 0x1000);
 
+void initialize_local_apic(struct local_apic *local_apic, int local_apic_id){
+    
+    local_apic->id_register = local_apic_id;
+    local_apic->version_register = 0x50014;
+    
+    local_apic->destination_format_register = 0xffffffff; 
+    local_apic->spurious_interrupt_vector_register = 0xff;
+    
+    local_apic->local_vector_table.timer_register = /*masked*/0x10000;
+    local_apic->local_vector_table.thermal_sensor_register = /*masked*/0x10000;
+    local_apic->local_vector_table.performance_monitoring_counters_register = /*masked*/0x10000;
+    local_apic->local_vector_table.lint0_register = /*masked*/0x10000;
+    local_apic->local_vector_table.lint1_register = /*masked*/0x10000;
+    local_apic->local_vector_table.error_register = /*masked*/0x10000;
+    
+    local_apic->highest_interrupt_in_service = -1;
+    local_apic->highest_pending_interrupt    = -1;
+}
+
 int apic__get_highest_set_bit(u32 apic_register[8]){
     
     for(int vector_number = 255; vector_number >= 0; vector_number--){

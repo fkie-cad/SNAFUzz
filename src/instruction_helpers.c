@@ -3282,18 +3282,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             registers->vtl_state.gs_base = Parameters->InitialVpContext.gs.base;
             
             // @note: Each vtl has its own local apic. Not sure what the initialization is...
-            registers->vtl_state.local_apic.destination_format_register = 0xffffffff; 
-            registers->vtl_state.local_apic.spurious_interrupt_vector_register = 0xff;
-            
-            registers->vtl_state.local_apic.local_vector_table.timer_register = /*masked*/0x10000;
-            registers->vtl_state.local_apic.local_vector_table.thermal_sensor_register = /*masked*/0x10000;
-            registers->vtl_state.local_apic.local_vector_table.performance_monitoring_counters_register = /*masked*/0x10000;
-            registers->vtl_state.local_apic.local_vector_table.lint0_register = /*masked*/0x10000;
-            registers->vtl_state.local_apic.local_vector_table.lint1_register = /*masked*/0x10000;
-            registers->vtl_state.local_apic.local_vector_table.error_register = /*masked*/0x10000;
-            
-            registers->vtl_state.local_apic.highest_interrupt_in_service = -1;
-            registers->vtl_state.local_apic.highest_pending_interrupt    = -1;
+            initialize_local_apic(&registers->vtl_state.local_apic, context->registers.local_apic.id_register);
         }break;
         
         case /*HvCallVtlCall*/0x11:

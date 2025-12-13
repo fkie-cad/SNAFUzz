@@ -494,19 +494,7 @@ int efi_setup_initial_state(struct context *context){
         registers.ia32_mtrr_phys_base = 6;
         registers.ia32_mtrr_phys_mask = 0x7f00000800;
         
-        
-        registers.local_apic.destination_format_register = 0xffffffff; 
-        registers.local_apic.spurious_interrupt_vector_register = 0xff;
-        
-        registers.local_apic.local_vector_table.timer_register = /*masked*/0x10000;
-        registers.local_apic.local_vector_table.thermal_sensor_register = /*masked*/0x10000;
-        registers.local_apic.local_vector_table.performance_monitoring_counters_register = /*masked*/0x10000;
-        registers.local_apic.local_vector_table.lint0_register = /*masked*/0x10000;
-        registers.local_apic.local_vector_table.lint1_register = /*masked*/0x10000;
-        registers.local_apic.local_vector_table.error_register = /*masked*/0x10000;
-        
-        registers.local_apic.highest_interrupt_in_service = -1;
-        registers.local_apic.highest_pending_interrupt    = -1;
+        initialize_local_apic(&registers.local_apic, 0);
         
         registers.cr0 = 0x80010033; // PE MP ET NE WP PG
         registers.cr4 = 0x40668;    // DE PAE MCE OSFXSR OSXMMEXCPT OSXSAVE
