@@ -1489,18 +1489,19 @@ void helper_cpuid(struct context *context, struct registers *registers){
             //     6 - CreatePort
             //     7 - ConnectPort
             //     8 - AccessStats
-            //     9 - Reserved2
-            //    10 - Debugging
-            //    11 - CpuManagement
-            //    12 - Reserve
-            //    13 - Reserved
+            //     9 - Reserved
+            //    10 - Reserved
+            //    11 - Debugging
+            //    12 - CpuManagement
+            //    13 - Reserve
             //    14 - Reserved
-            //    15 - AccessVSM
-            //    16 - AccessVpRegisters
-            //    17 - Reserved
+            //    15 - Reserved
+            //    16 - AccessVSM
+            //    17 - AccessVpRegisters
             //    18 - Reserved
-            //    19 - EnableExtendedHypercalls
-            //    20 - StartVirtualProcessor
+            //    19 - Reserved
+            //    20 - EnableExtendedHypercalls
+            //    21 - StartVirtualProcessor
             //     
             rbx = 
                     /*PostMessages*/(1 << 4) | 
@@ -1510,7 +1511,8 @@ void helper_cpuid(struct context *context, struct registers *registers){
                     /*AccessVSM*/(1 << 15) | 
                     /*AccessVpRegisters*/(1 << 16) |
 #endif
-                    /*EnableExtendedHypercalls*/(1 << 19) | 
+                    /*EnableExtendedHypercalls*/(1 << 19) |  // This is wrong wtf? @cleanup
+                    /*StartVirtualProcessor*/(1 << 21) |
                     0;
             
             // ECX = 0-4 Reserved

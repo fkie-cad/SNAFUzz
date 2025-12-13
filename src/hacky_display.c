@@ -420,11 +420,13 @@ unsigned initialize_hacky_display(void *unused){
                 &BitmapInfo,
                 DIB_RGB_COLORS, SRCCOPY);
         
-        // Cancel the hypervisor, so that it can check whether or not it should issue a timer interrupt
-        // or input event.
-        cancel_virtual_processor();
-        
-        Sleep(16);
+        for(int index = 0; index < 16; index++){
+            // Cancel the hypervisor, so that it can check whether or not it should issue a timer interrupt
+            // or input event.
+            cancel_virtual_processor();
+            
+            Sleep(1);
+        }
     }
     
     // Exit the program if the user closes the window.
