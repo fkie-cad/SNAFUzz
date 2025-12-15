@@ -80,11 +80,25 @@ struct hv_message{
     u8 payload[];
 };
 
-void sint_post_message(struct context *context, u32 synthetic_interrupt_number, u32 message_type, void *payload, u8 payload_size){
+void sint_post_message(struct context *context, u32 target_vp, u32 synthetic_interrupt_number, u32 message_type, void *payload, u8 payload_size){
     
     struct registers *registers = &context->registers;
     
     if(!(registers->hv_x64_msr_simp & 1)) return;
+    
+    if(context->thread_index != (int)target_vp){
+        struct hv_message *message = (void *)push_data(&context->permanent_arena, u8, sizeof(*message) + payload_size); // @cleanup: Use malloc?
+        message->message_type  = message_type;
+        message->message_flags = 0;
+        message->payload_size  = payload_size;
+        memcpy(message->payload, payload, payload_size);
+        
+        struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+        // @cleanup: Threading.
+        other->vmbus.pending_messages[other->vmbus.pending_message_reserved % array_count(other->vmbus.pending_messages)] = message;
+        other->vmbus.pending_message_reserved += 1;
+        return;
+    }
     
     u8 *message_page = get_physical_memory_for_write(context, registers->hv_x64_msr_simp & ~0xfff);
     
@@ -97,7 +111,6 @@ void sint_post_message(struct context *context, u32 synthetic_interrupt_number, 
         memcpy(message->payload, payload, payload_size);
         
         u64 synthetic_interrupt_configuration = registers->hv_x64_msr_sint[synthetic_interrupt_number];
-        
         pend_interrupt(context, registers, synthetic_interrupt_configuration & 0xff);
     }else{
         message->message_flags |= /*MessagePending*/1;
@@ -235,12 +248,15 @@ void vmbus_send_packet(struct context *context, struct vmbus_channel *channel, s
     
     *(u32 *)(header + 0) = packet_end;
     
-    u8 *siefp = get_physical_memory_for_write(context, context->registers.hv_x64_msr_siefp & ~0xfff);
+    
+    struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+    u64 siefp_msr = (int)channel->target_vp == context->thread_index ? context->registers.hv_x64_msr_siefp : other->registers.hv_x64_msr_siefp;
+    u8 *siefp = get_physical_memory_for_write(context, siefp_msr & ~0xfff);
     u64 flag  = 1ull << channel->channel_id;
     *(u32 *)(siefp + /*VMBUS_SINT*/2 * 0x100) |= flag;
     
     if(!context->vmbus.send_packet_skip_interrupt){
-        sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_NONE*/0, null, 0);
+        sint_post_message(context, channel->target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_NONE*/0, null, 0);
     }
 }
 
@@ -304,7 +320,7 @@ enum vmbus_device_kind vmbus_interface_type_id_to_device_type(struct guid device
 }
 
 void vmbus_handle_end_of_message(struct context *context){
-
+    
     if(context->vmbus.pending_message_send < context->vmbus.pending_message_reserved){
         struct hv_message *pending_message = context->vmbus.pending_messages[context->vmbus.pending_message_send++ % array_count(context->vmbus.pending_messages)];
         
@@ -395,6 +411,11 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             context->vmbus.monitor_page1 = message->initiate_contact.monitor_page1;
             context->vmbus.monitor_page2 = message->initiate_contact.monitor_page2;
+            context->vmbus.target_vp = message->initiate_contact.target_vcpu;
+            if(globals.second_thread_context){
+                struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+                other->vmbus.target_vp = context->vmbus.target_vp; // all of this sucks!
+            }
             
             struct{
                 u64 message_type;
@@ -408,7 +429,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("[" __FUNCTION__ "] Received VMBUS_MSG_INITIATE_CONTACT with version 0x%x sending supported %d\n", message->initiate_contact.vmbus_version_requested, version_response_message.version_supported);
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &version_response_message, sizeof(version_response_message));
+            sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &version_response_message, sizeof(version_response_message));
         }break;
         
         case /*VMBUS_MSG_REQUESTOFFERS*/3:{
@@ -508,7 +529,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                     offer_channel_message.pipe_mode = 4;
                 }
                 
-                sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &offer_channel_message, sizeof(offer_channel_message) - /*padding*/4);
+                sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &offer_channel_message, sizeof(offer_channel_message) - /*padding*/4);
                 
                 struct vmbus_channel *channel = push_struct(&context->permanent_arena, struct vmbus_channel);
                 channel->device_kind = at + 1;
@@ -526,7 +547,12 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("["__FUNCTION__"] VMBUS_MSG_ALLOFFERS_DELIVERED\n");
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_type, sizeof(message_type));
+            sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_type, sizeof(message_type));
+            
+            if(globals.second_thread_context){
+                struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+                other->vmbus = context->vmbus; // all of this sucks!
+            }
         }break;
         
         case /*VMBUS_MSG_CREATE_GPADL*/8:{
@@ -579,7 +605,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .gpadl_id = message->gpadl_header.gpadl_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &gpadl_created, sizeof(gpadl_created));
+            sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &gpadl_created, sizeof(gpadl_created));
             
             if(gpadl->next && gpadl->next->next == null && context->use_hypervisor){
                 // :vmbus_tsc_frequency_hack
@@ -608,6 +634,12 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                     *(u64 *)(tsc_page + 16) = old_time - new_time;
                 }
             }
+            
+            if(globals.second_thread_context){
+                struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+                other->vmbus = context->vmbus; // all of this sucks!
+            }
+            // handle_debugger(context);
         }break;
         
         case /*VMBUS_MSG_OPEN_CHANNEL*/5:{
@@ -628,6 +660,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             u32 read_ring_buffer_pages = message->open_channel.read_ring_buffer_pages;
             
+            channel->target_vp = message->open_channel.target_vp;
             channel->gpadl_id = gpadl->gpadl_id;
             channel->read_ring_buffer_pages = read_ring_buffer_pages;
             
@@ -654,11 +687,17 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .open_id = message->open_channel.open_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &open_channel_result, sizeof(open_channel_result));
+            sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &open_channel_result, sizeof(open_channel_result));
             
-            if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     >>> %s\n", vmbus_device_kind_string[channel->device_kind]);
+            if(PRINT_VMBUS_EVENTS || PRINT_VMBUS_INITIALIZATION_EVENTS) print("     >>> %s (target_vp %u)\n", vmbus_device_kind_string[channel->device_kind], channel->target_vp);
             if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
             if(channel->device_kind == VMBUS_DEVICE_keyboard) context->vmbus.keyboard = channel;
+            
+            
+            if(globals.second_thread_context){
+                struct context *other = context == globals.main_thread_context ? globals.second_thread_context : globals.main_thread_context;
+                other->vmbus = context->vmbus; // all of this sucks!
+            }
         }break;
         
         case /*CLOSECHANNEL*/7:{
@@ -678,7 +717,7 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
                 .gpadl_id = message->teardown.gpadl_id,
             };
             
-            sint_post_message(context, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_gpadl_torndown, sizeof(message_gpadl_torndown));
+            sint_post_message(context, context->vmbus.target_vp, /*VMBUS_SINT*/2, /*HV_MESSAGE_VMBUS*/1, &message_gpadl_torndown, sizeof(message_gpadl_torndown));
         }break;
         
         default:{
@@ -991,8 +1030,6 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                             }
                         }
                     }
-                    
-                    
                     
                     if(vm_scsi_command->cdb_length > 0){
                         //

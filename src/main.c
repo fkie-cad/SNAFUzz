@@ -225,6 +225,9 @@ __declspec(dllimport) HANDLE FindFirstFileA(char *file_name, struct win32_find_d
 __declspec(dllimport) int FindNextFileA(HANDLE find_handle, struct win32_find_data *find_data);
 __declspec(dllimport) int FindClose(HANDLE hFindFile);
 
+__declspec(dllimport) HANDLE CreateEventA(void *SecurityAttributes, int ManualReset, int InitialState, char *OptionalName);
+__declspec(dllimport) u32 WaitForSingleObject(HANDLE hHandle, u32 dwMilliseconds);
+__declspec(dllimport) int SetEvent(HANDLE EventHandle);
 
 
 // @note: For downloading .pdb files from the microsoft symbol server.
@@ -258,6 +261,86 @@ __declspec(dllimport) void GetSystemInfo(struct system_info *system_info);
 #include "uefi_bios.h"
 #include "utilities.c"
 #include "cpu_state.c"
+
+#if _WIN32
+
+
+struct whv_register_value{
+    union{
+        u64     reg64;
+        __m128i xmm;
+        struct segment segment;
+        struct{
+            u64 not_sure;
+            u32 MxCsr;
+            u32 MxCsrMask;
+        };
+        
+        struct{
+            u16 FpControl;
+            u16 FpStatus;
+            u8  FpTag;
+        };
+        
+        struct{
+            u16 padding[3];
+            u16 Limit;
+            u64 Base;
+        } global_segment;
+        
+        struct{
+            u32 EventPending : 1;
+            u32 EventType    : 3;
+            u32 Reserved     : 4;
+            u32 DeliverErrorCode : 1;
+            u32 Reserved2    : 7;
+            u32 Vector       : 16;
+            u32 ErrorCode;
+            u64 ExceptionParameter;
+        } pending_event;
+        
+    };
+};
+
+struct interrupt_control{
+    u64 Type : 8;
+    u64 DestinationMode : 4;
+    u64 TriggerMode : 4;
+    u64 Reserved : 48;
+    u32 Destination;
+    u32 Vector;
+};
+
+//
+// @note: Technically these functions return 'HRESULT', but 'NTSTATUS' and 'HRESULT' seem to work the same way.
+//
+
+#pragma comment(lib, "winhvplatform.lib")
+
+__declspec(dllimport) s32 WHvGetCapability(u32 CapabilityCode, void *CapabilityBuffer, u32 CapabilityBufferSizeInBytes, u32 *WrittenSizeInBytes);
+__declspec(dllimport) s32 WHvCreatePartition(HANDLE *Partition);
+__declspec(dllimport) s32 WHvDeletePartition(HANDLE Partition);
+__declspec(dllimport) s32 WHvGetPartitionProperty(HANDLE Partition, u32 PropertyCode, void *PropertyBuffer, u32 PropertyBufferSizeInBytes, u32 *SizeWrittenInBytes);
+__declspec(dllimport) s32 WHvSetPartitionProperty(HANDLE Partition, u32 PropertyCode, void *PropertyBuffer, u32 PropertyBufferSizeInBytes);
+
+__declspec(dllimport) s32 WHvSetupPartition(HANDLE Partition);
+__declspec(dllimport) s32 WHvCreateVirtualProcessor(HANDLE Partition, u32 VirtualProcessorIndex, u32 Flags);
+__declspec(dllimport) s32 WHvRunVirtualProcessor(HANDLE Partition, u32 VirtualProcessorIndex, void *ExitContext, u32 ExitContextSizeInBytes);
+__declspec(dllimport) s32 WHvCancelRunVirtualProcessor(HANDLE Partition, u32 VpIndex, u32 Flags);
+
+__declspec(dllimport) s32 WHvMapGpaRange(HANDLE Partition, void *SourceAddress, u64 PhysicalGuestAddress, u64 SizeInBytes, u32 Flags);
+__declspec(dllimport) s32 WHvUnmapGpaRange(HANDLE Partition, u64 GuestAddress, u64 SizeInBytes);
+
+__declspec(dllimport) s32 WHvSetVirtualProcessorRegisters(HANDLE Partition, u32 VirtualProcessorIndex, u32 *RegisterNames, u32 RegisterCount, struct whv_register_value *RegisterValues);
+__declspec(dllimport) s32 WHvGetVirtualProcessorRegisters(HANDLE Partition, u32 VirtualProcessorIndex, u32 *RegisterNames, u32 RegisterCount, struct whv_register_value *RegisterValues);
+__declspec(dllimport) s32 WHvSetVirtualProcessorXsaveState(HANDLE Partition, u32 VirtualProcessorIndex, void *Buffer, u32 BufferSizeInBytes);
+__declspec(dllimport) s32 WHvGetVirtualProcessorXsaveState(HANDLE Partition, u32 VirtualProcessorIndex, void* Buffer, u32 BufferSizeInBytes, u32 *BytesWritten);
+
+__declspec(dllimport) s32 WHvRequestInterrupt(HANDLE Partition, struct interrupt_control *Interrupt, u32 InterruptControlSize);
+__declspec(dllimport) s32 WHvGetVirtualProcessorInterruptControllerState2(HANDLE Partition, u32 VirtualProcessorIndex, void *State, u32 StateSize, u32 *BytesWritten);
+__declspec(dllimport) s32 WHvSetVirtualProcessorInterruptControllerState2(HANDLE Partition, u32 VirutalProcessorIndex, void *State, u32 StateSize);
+
+#endif
 
 struct translation_lookaside_buffer{
     struct translation_lookaside_buffer_entry{
@@ -453,6 +536,15 @@ struct context{
     // 'ia32_tsc' for time spend outside of guest execution.
     u64 next_timer_interrupt_time_or_zero; 
     
+    volatile u64 pending_interrupt_reserved;
+    volatile u64 pending_interrupt_send;
+    struct pending_interrupt{
+        u8 vector_number;
+        u8 destination;
+        u8 destination_type;
+        u8 destination_mode;
+    } pending_interrupts[16]; // 16 ought to be enough for everybody!
+    
     // 
     // CPU state members.
     // 
@@ -476,6 +568,7 @@ struct context{
             
             u32 gpadl_id;
             u32 read_ring_buffer_pages;
+            u32 target_vp;
             
             struct vmbus_ring_buffer{
                 u64 header;
@@ -504,6 +597,7 @@ struct context{
         struct vmbus_channel *mouse;
         
         int send_packet_skip_interrupt;
+        u32 target_vp;
         
         u64 pending_message_reserved;
         u64 pending_message_send;
@@ -626,7 +720,10 @@ struct globals{
     int debugger_mode;
     
     // Set to make sure we don't invoke 'handle_debugger' recursively.
-    int in_debugger;
+    // And machinery to make sure only one core ever is inside handle_debugger.
+    volatile int in_debugger;
+    volatile HANDLE debugger_event;
+    volatile int other_core_waiting_on_debugger;
     
     // Determines how 'print_registers' behaves.
     int print_mode;
@@ -704,6 +801,7 @@ struct globals{
     } disk_info;
     
     struct context *main_thread_context;
+    struct context *second_thread_context;
     
     u64 big_allocation_base;
     u64 process_cr3;
@@ -1861,7 +1959,8 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         if(use_jit){
             start_execution_jit(context);
         }else{
-            
+            context->Partition = initialize_hypervisor(context);
+            context->thread_index = 0;
             start_execution_hypervisor(context);
         }
         

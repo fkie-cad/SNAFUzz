@@ -1556,7 +1556,7 @@ void helper_cpuid(struct context *context, struct registers *registers){
                     /*injecting synthetic machine checks*/(1 << 9) | 
                     /*guest crash msr*/(1 << 10) | 
                     // /*NPIEP*/(1 << 12) | 
-                    /*ExtendedGvaRangesForFlushVirtualAddressList*/(1 << 14) | 
+                    // /*ExtendedGvaRangesForFlushVirtualAddressList*/(1 << 14) | 
                     /*Hypercall output XMM*/(1 << 15) | 
                     /*Sint polling*/(1 << 17) | 
                     /*HypercallMsrLock*/(1 << 18) | 
@@ -1569,7 +1569,8 @@ void helper_cpuid(struct context *context, struct registers *registers){
         
         case 0x40000004:{
             // Implementation Recommendations
-            rax = /*REMOTE_TLB_FLUSH_RECOMMENDED*/  (1 <<  2) 
+            rax = 0
+                    // | /*REMOTE_TLB_FLUSH_RECOMMENDED*/  (1 <<  2) 
                     
                     | /*APIC_ACCESS_RECOMMENDED*/       (1 <<  3) 
                     | /*RELAXED_TIING_RECOMMENDED*/     (1 <<  5)
@@ -1577,7 +1578,7 @@ void helper_cpuid(struct context *context, struct registers *registers){
 #ifdef _WIN32  // :AEOI_on_linux
                     | /*DEPRECATING_AEOI_RECOMMENDED*/  (1 <<  9)
 #endif
-                    | /*ClUSTER_IPI_RECOMMENDED*/       (1 << 10) 
+                    // | /*ClUSTER_IPI_RECOMMENDED*/       (1 << 10) 
                     | /*EX_PROCESSOR_MASK_RECOMMENDED*/ (1 << 11)
                     | /*UseDirectLocalFlushEntire*/     (1 << 17);
             rbx = 0xfff; // default number of spinlock retry attempts
@@ -1801,7 +1802,7 @@ void pend_timer_interrupt(struct context *context, struct registers *registers, 
         },
     };
     
-    if(PRINT_TIMER_EVENTS) print("[" __FUNCTION__ "] interrupt time %f\n", time * 100.0 / 1.0e+9);
+    if(PRINT_TIMER_EVENTS) print("[" __FUNCTION__ "] [%d] interrupt time %f\n", context->thread_index, time * 100.0 / 1.0e+9);
     
     //
     // Write the timer message to the 'sint_message_page' where the guest can then read it.
@@ -2140,8 +2141,8 @@ void helper_rdmsr(struct context *context, struct registers *registers){
             if(registers->hv_x64_msr_reference_tsc_page & 1){
                 u8 *memory = get_physical_memory_for_read(context, HvlpReferenceTscPage);
                 
-                u64 TscScale  = *(u64 *)(memory + HvlpReferenceTscPage +  8);
-                u64 TscOffset = *(u64 *)(memory + HvlpReferenceTscPage + 16);
+                u64 TscScale  = *(u64 *)(memory +  8);
+                u64 TscOffset = *(u64 *)(memory + 16);
                 
                 u64 ScaledTscHigh = 0;
                 _umul128(registers->ia32_tsc, TscScale, &ScaledTscHigh);
@@ -2164,7 +2165,7 @@ void helper_rdmsr(struct context *context, struct registers *registers){
         case HV_X64_MSR_REFERENCE_TSC: msr_value = registers->hv_x64_msr_reference_tsc_page; break;
         
         case /*HV_X64_MSR_HYPERCALL*/0x40000001: msr_value = registers->hv_x64_msr_hypercall_page; break;
-        case /*HV_X64_MSR_VP_INDEX */0x40000002: msr_value = 1; break;
+        case /*HV_X64_MSR_VP_INDEX */0x40000002: msr_value = registers->local_apic.id_register; break;
         case /*HV_X64_MSR_VP_ASSIST*/0x40000073: msr_value = registers->hv_x64_msr_vp_assist_page; break;
         
         case HV_X64_MSR_GUEST_IDLE:{
@@ -2736,6 +2737,161 @@ void helper_vmcall(struct context *context, struct registers *registers){
             }
             
             crash_assert(false);
+        }break;
+        
+        case /*HvCallGetVpIndexFromApicId*/0x9a:{
+            crash_assert(!Fast);
+            
+            struct{
+                u64 PartitionId;
+                u8  TargetVtl;
+                u8  Padding[7];
+                struct{
+                    u32 ApicId;
+                    u32 Padding;
+                } InputList[];
+            } *parameters = (void *)get_physical_memory_for_read(context, input_gpa);
+            
+            struct{
+                u32 VpIndex;
+                u32 Padding;
+            } *output_buffer = (void *)get_physical_memory_for_write(context, output_gpa);
+            
+            for(int index = 0; index < rep_count; index++){
+                output_buffer[index].VpIndex = parameters->InputList[index].ApicId;
+            }
+        }break;
+        
+        case /*HvCallStartVirtualProcessor*/0x99:{
+            crash_assert(!Fast);
+            crash_assert(context->use_hypervisor);
+            
+            struct{
+                u64 PartitionId;
+                u32 VpIndex;
+                u8  TargetVtl;
+                u8  Padding[3];
+                
+                struct{
+                    u64 rip;
+                    u64 rsp;
+                    u64 rflags;
+                    
+                    struct segment cs;
+                    struct segment ds;
+                    struct segment es;
+                    struct segment fs;
+                    struct segment gs;
+                    struct segment ss;
+                    struct segment tr;
+                    struct segment ldtr;
+                    
+                    struct table_register{
+                        u16 padding[3];
+                        u16 limit;
+                        u64 base;
+                    } idtr, gdtr;
+                    
+                    u64 efer;
+                    u64 cr0;
+                    u64 cr3;
+                    u64 cr4;
+                    u64 pat;
+                } InitialVpContext;
+            } *input_buffer = (void *)get_physical_memory_for_read(context, input_gpa);
+            
+            if(PRINT_HOOK_EVENTS){
+                print("HvCallStartVirtualProcessor:\n");
+                print("    PartitionId %p VpIndex %u TargetVtl %u\n", input_buffer->PartitionId, input_buffer->VpIndex, input_buffer->TargetVtl);
+                print("    Rip %p Rsp %p Rflags %p\n", input_buffer->InitialVpContext.rip, input_buffer->InitialVpContext.rsp, input_buffer->InitialVpContext.rflags);
+                print("    cs: "); print_segment(input_buffer->InitialVpContext.cs);
+                print("    ds: "); print_segment(input_buffer->InitialVpContext.ds);
+                print("    es: "); print_segment(input_buffer->InitialVpContext.es);
+                print("    fs: "); print_segment(input_buffer->InitialVpContext.fs);
+                print("    gs: "); print_segment(input_buffer->InitialVpContext.gs);
+                print("    ss: "); print_segment(input_buffer->InitialVpContext.ss);
+                print("    tr: "); print_segment(input_buffer->InitialVpContext.tr);
+                print("    ldtr: "); print_segment(input_buffer->InitialVpContext.ldtr);
+                print("    idtr: %p 0x%x\n", input_buffer->InitialVpContext.idtr.base, input_buffer->InitialVpContext.idtr.limit);
+                print("    gdtr: %p 0x%x\n", input_buffer->InitialVpContext.gdtr.base, input_buffer->InitialVpContext.gdtr.limit);
+                print("    efer %p, cr0 %p, cr3 %p, cr4 %p, pat %p\n", input_buffer->InitialVpContext.efer, input_buffer->InitialVpContext.cr0, input_buffer->InitialVpContext.cr3, input_buffer->InitialVpContext.cr4, input_buffer->InitialVpContext.pat);
+            }
+            
+            // Well we don't know how to do this factoring Xd.
+            struct context *thread_two = os_allocate_memory(sizeof(*context));
+            
+            thread_two->Partition = context->Partition;
+            thread_two->thread_index = 1;
+            thread_two->snapshot_mode = 1;
+            thread_two->physical_memory_size = context->physical_memory_size;
+            thread_two->physical_memory      = context->physical_memory;
+            thread_two->physical_memory_copied      = context->physical_memory_copied;
+            thread_two->physical_memory_dirty      = context->physical_memory_dirty;
+            thread_two->physical_memory_executed      = context->physical_memory_executed;
+            thread_two->vmbus = context->vmbus;
+            
+            void context_initialize_main_and_thread_context_common(struct context *context);
+            context_initialize_main_and_thread_context_common(thread_two);
+            
+            thread_two->registers.rip = input_buffer->InitialVpContext.rip;
+            thread_two->registers.rsp = input_buffer->InitialVpContext.rsp;
+            thread_two->registers.rflags = input_buffer->InitialVpContext.rflags;
+            thread_two->registers.cs = input_buffer->InitialVpContext.cs;
+            thread_two->registers.ds = input_buffer->InitialVpContext.ds;
+            thread_two->registers.es = input_buffer->InitialVpContext.es;
+            thread_two->registers.fs = input_buffer->InitialVpContext.fs;
+            thread_two->registers.gs = input_buffer->InitialVpContext.gs;
+            thread_two->registers.ss = input_buffer->InitialVpContext.ss;
+            thread_two->registers.tr = input_buffer->InitialVpContext.tr;
+            thread_two->registers.ldt = input_buffer->InitialVpContext.ldtr;
+            thread_two->registers.idt_limit = input_buffer->InitialVpContext.idtr.limit;
+            thread_two->registers.idt_base = input_buffer->InitialVpContext.idtr.base;
+            thread_two->registers.gdt_limit = input_buffer->InitialVpContext.gdtr.limit;
+            thread_two->registers.gdt_base = input_buffer->InitialVpContext.gdtr.base;
+            thread_two->registers.ia32_efer = input_buffer->InitialVpContext.efer;
+            thread_two->registers.cr0 = input_buffer->InitialVpContext.cr0;
+            thread_two->registers.cr3 = input_buffer->InitialVpContext.cr3;
+            thread_two->registers.cr4 = input_buffer->InitialVpContext.cr4;
+            thread_two->registers.ia32_pat = input_buffer->InitialVpContext.pat;
+            thread_two->registers.ia32_apic_base = context->registers.ia32_apic_base & ~0x100;
+            initialize_local_apic(&thread_two->registers.local_apic, 1);
+            
+            // @cleanup: Why do we have both of these?
+            thread_two->registers.fs_base = input_buffer->InitialVpContext.fs.base;
+            thread_two->registers.gs_base = input_buffer->InitialVpContext.gs.base;
+            
+            // @hmm:
+            thread_two->registers.ia32_mtrr_cap = context->registers.ia32_mtrr_cap;
+            thread_two->registers.ia32_mtrr_def_type = context->registers.ia32_mtrr_def_type;
+            thread_two->registers.ia32_mtrr_phys_base = context->registers.ia32_mtrr_phys_base;
+            thread_two->registers.ia32_mtrr_phys_mask = context->registers.ia32_mtrr_phys_mask;
+            
+            thread_two->registers.xcr0 = context->registers.xcr0;
+            thread_two->registers.ia32_tsc = context->registers.ia32_tsc;
+            thread_two->registers.ia32_tsc_aux = 1;
+            
+            thread_two->registers.dr0 = context->registers.dr0;
+            thread_two->registers.dr1 = context->registers.dr1;
+            thread_two->registers.dr2 = context->registers.dr2;
+            thread_two->registers.dr3 = context->registers.dr3;
+            thread_two->registers.dr6 = context->registers.dr6;
+            thread_two->registers.dr7 = context->registers.dr7;
+            
+            thread_two->registers.hv_x64_msr_vp_assist_page = context->registers.hv_x64_msr_vp_assist_page;
+            thread_two->registers.hv_x64_msr_hypercall_page = context->registers.hv_x64_msr_hypercall_page;
+            thread_two->registers.hv_x64_msr_reference_tsc_page = context->registers.hv_x64_msr_reference_tsc_page;
+            
+            thread_two->next_timer_interrupt_time_or_zero = 0;
+            
+            // 
+            // Aggressively, search out all of the loaded modules.
+            // 
+            // struct loaded_module *nt = maybe_find_nt_and_load_module_list(context);
+            
+            globals.second_thread_context = thread_two;
+            
+            void start_execution_hypervisor(struct context *);
+            CreateThread(null, 0, (u32 (*)(void *))(void *)start_execution_hypervisor, thread_two, 0, 0);
         }break;
         
         case 0x8001:{ // HvExtCallQueryCapabilities

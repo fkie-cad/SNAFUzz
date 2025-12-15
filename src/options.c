@@ -129,6 +129,19 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 // 
 #define ENABLE_VSM 0
 
+// 
+// Currently, we only support 2 Core "SMP".
+// There is also no real use case for fuzzing yet.
+// Also snapshots don't support multi core yet.
+// Also currently still pretty buggy I assume.
+// Lots to do :)
+// 
+// BUT, we have done it, it boots with more than one core!
+// 
+//                                     - Pascal Beyer 15.12.2025
+// 
+#define ENABLE_SMP 1
+
 
 //_____________________________________________________________________________________________________________________
 // Debugging options

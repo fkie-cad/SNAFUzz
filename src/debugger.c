@@ -504,6 +504,16 @@ int hypervisor_set_breakpoint(struct context *context, struct registers *registe
         break;
     }
     
+    if(globals.second_thread_context){
+        struct context *other = context == globals.second_thread_context ? globals.main_thread_context : globals.second_thread_context;
+        other->registers.dr0 = registers->dr0;
+        other->registers.dr1 = registers->dr1;
+        other->registers.dr2 = registers->dr2;
+        other->registers.dr3 = registers->dr3;
+        other->registers.dr6 = registers->dr6;
+        other->registers.dr7 = registers->dr7;
+    }
+    
     return 1; // success
 }
 
@@ -573,6 +583,8 @@ u64 parse_one_address(struct context *context, struct string symbol, int *error)
             *error = 1;
             return 0;
         }
+        
+        string_skip_whitespace(&symbol);
         
         u64 address = get_symbol_from_module(context, module, symbol);
         if(address) return address;
@@ -2245,14 +2257,39 @@ void bring_console_to_front(void);
 
 void handle_debugger(struct context *context){
     
+    if(globals.second_thread_context){
+        // 
+        // Only allow one core to enter the debugger at a time.
+        // 
+        if(atomic_compare_exchange((long *)&globals.in_debugger, 1, 0) != 0){
+            globals.other_core_waiting_on_debugger = true;
+            WaitForSingleObject(globals.debugger_event, (u32)-1);
+            return;
+        }
+        
+        
+        struct context *other = (context == globals.main_thread_context) ? globals.second_thread_context : globals.main_thread_context;
+        
+        do{
+            s32 CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/other->thread_index, /*Flags (must be zero)*/0);
+            if(CancelResult) print("CancelResult %x\n", CancelResult);
+            
+            Sleep(1);
+        }while(!globals.other_core_waiting_on_debugger);
+    }else{
+        // 
+        // @cleanup: There is a race here, where the processor counld get canceled before we set this value.
+        //           In this case, for whatever reason, the RF flag does not work. @investigate.
+        // 
+        globals.in_debugger = 1;
+    }
+    
     struct registers *registers = &context->registers;
     
     //
     // We save the crash information right here and restore it upon return.
     //
     struct crash_information original_crash_information = enter_debugging_routine(context);
-    
-    assert(!globals.in_debugger); // Make sure we don't call this recursively.
     
     if(context->use_hypervisor){
         for(u32 bit_index = 0; bit_index < 4; bit_index++){
@@ -2285,6 +2322,8 @@ void handle_debugger(struct context *context){
             }else if(result == 0){
                 exit_debugging_routine(context, original_crash_information);
                 globals.breakpoint_hit_index = -1;
+                globals.in_debugger = 0;
+                if(globals.second_thread_context) SetEvent(globals.debugger_event);
                 return;
             }
         }
@@ -2304,7 +2343,6 @@ void handle_debugger(struct context *context){
     struct breakpoint breakpoint_hit = {0}; 
     if(globals.breakpoint_hit_index >= 0) breakpoint_hit = globals.breakpoints[globals.breakpoint_hit_index];    
     
-    globals.in_debugger = true;
     globals.single_stepping = false;
     
     if(globals.print_trace && globals.trace_file != stdout){
@@ -2358,6 +2396,7 @@ void handle_debugger(struct context *context){
             
             print("script: %.*s", line.size, line.data);
         }else{
+            print("[%d] ", registers->local_apic.id_register);
             print("debugger: ");
             
             //
@@ -2959,7 +2998,7 @@ void handle_debugger(struct context *context){
                 else if(string_match(reg, string("sint1")) || string_match(reg, string("hv_x64_msr_sint1"))) { print("%p\n", registers->hv_x64_msr_sint1); }
                 else if(string_match(reg, string("sint2")) || string_match(reg, string("hv_x64_msr_sint2"))) { print("%p\n", registers->hv_x64_msr_sint2); }
                 else if(string_match(reg, string("sint3")) || string_match(reg, string("hv_x64_msr_sint3"))) { print("%p\n", registers->hv_x64_msr_sint3); }
-                else if(string_match(reg, string("stimer0")) || string_match(reg, string("hv_x64_msr_stimer0"))) { print("count = %p config = %p", registers->hv_x64_msr_stimer0_count, registers->hv_x64_msr_stimer0_config); }
+                else if(string_match(reg, string("stimer0")) || string_match(reg, string("hv_x64_msr_stimer0"))) { print("count = %p config = %p\n", registers->hv_x64_msr_stimer0_count, registers->hv_x64_msr_stimer0_config); }
                 else if(string_match(reg, string("vp_assist")) || string_match(reg, string("vp_assist_page")) || string_match(reg, string("hv_x64_msr_vp_assist_page"))) { print("%p\n", registers->hv_x64_msr_vp_assist_page); }
                 else if(string_match(reg, string("hypercall")) || string_match(reg, string("hypercall_page")) || string_match(reg, string("hv_x64_msr_hypercall_page"))) { print("%p\n", registers->hv_x64_msr_hypercall_page); }
                 else if(string_match(reg, string("reference_tsc")) || string_match(reg, string("reference_tsc_page")) || string_match(reg, string("hv_x64_msr_reference_tsc_page"))) { print("%p\n", registers->hv_x64_msr_reference_tsc_page); }
@@ -2967,6 +3006,7 @@ void handle_debugger(struct context *context){
                     for(u32 index = 0; index < 16; index++){
                         print("sint%d = %p\n", index, registers->hv_x64_msr_sint[index]);
                     }
+                    print("count = %p config = %p\n", registers->hv_x64_msr_stimer0_count, registers->hv_x64_msr_stimer0_config);
                 }
                 
                 else print("Could not parse '%.*s' as a register.\n", reg.size, reg.data);
@@ -4613,6 +4653,27 @@ void handle_debugger(struct context *context){
             continue;
         }
         
+        if(string_match(command, string("swap"))){
+            
+            if(!globals.second_thread_context){
+                print("Second core not active.\n");
+                continue;
+            }
+            
+            // 
+            // Huiuiuiuiui, this feels janky :)
+            // 
+            
+            exit_debugging_routine(context, original_crash_information);
+            
+            context = (context == globals.main_thread_context) ? globals.second_thread_context : globals.main_thread_context;
+            
+            original_crash_information = enter_debugging_routine(context);
+            
+            registers = &context->registers;
+            continue;
+        }
+        
         if(string_match(command, string("apic"))){
             //
             // Print information about the apic.
@@ -5010,7 +5071,6 @@ void handle_debugger(struct context *context){
                 continue;
             }
             
-            
             prepare_debugger_jit_call(context, &debugger_jit_call_context);
             
             context->registers.rsp -= 0x10;
@@ -5057,6 +5117,19 @@ void handle_debugger(struct context *context){
     globals.breakpoint_hit_index = -1;
     globals.in_debugger    = false;
     snapshot_mode_currently_in_debugger = false;
+    
+    struct whv_register_value tsc = {registers->ia32_tsc};
+    s32 Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/0, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
+    if(Result < 0){
+        print("[WHvSetVirtualProcessorRegisters] Could not set rip.\n");
+    }
+    
+    Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/1, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
+    if(Result < 0){
+        print("[WHvSetVirtualProcessorRegisters] Could not set rip.\n");
+    }
+    
+    if(globals.second_thread_context) SetEvent(globals.debugger_event);
 }
 
 

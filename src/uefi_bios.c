@@ -2390,6 +2390,16 @@ void entry(u8 *boot_file_base, u64 page_table_pages, u64 efi_system_partition_st
         type_0_entry->apic_processor_id = 1;
         type_0_entry->apic_id = 0;
         type_0_entry->flags = /*enabled*/1;
+     
+        // :smp
+#if ENABLE_SMP
+        type_0_entry += 1;
+        type_0_entry->entry_type = 0;
+        type_0_entry->record_length = sizeof(*type_0_entry);
+        type_0_entry->apic_processor_id = 2;
+        type_0_entry->apic_id = 1;
+        type_0_entry->flags = /*enabled*/1;
+#endif
         
         struct {
             u8 entry_type;
