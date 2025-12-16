@@ -524,9 +524,10 @@ struct context{
     // Hypervisor members.
     //
     HANDLE Partition;
-    u32 hypervisor_require_auto_eoi;
     u64 potentially_usermode_snapshotting_breakpoint;
     
+    u32 hypervisor_require_auto_eoi;
+    u32 send_packet_skip_interrupt; // @cleanup: get rid of this?
     
     // :timer_interrupts
     // 
@@ -545,72 +546,21 @@ struct context{
         u8 destination_mode;
     } pending_interrupts[16]; // 16 ought to be enough for everybody!
     
+    
+    struct ticket_spinlock pending_message_lock;
+    volatile u64 pending_message_reserved;
+    volatile u64 pending_message_send;
+    struct pending_message{
+        u32 event_flag;
+        u32 sint_index;
+        struct hv_message *message;
+    } pending_messages[16]; // 16 ought to be enough for everybody!
+    int wait_for_eom;
+    
     // 
     // CPU state members.
     // 
     struct registers registers;
-    
-    struct{
-        struct vmbus_channel{
-            struct vmbus_channel *next;
-            
-            enum vmbus_device_kind{
-                VMBUS_DEVICE_unknown,
-                VMBUS_DEVICE_scsi,
-                VMBUS_DEVICE_mouse,
-                VMBUS_DEVICE_keyboard,
-                VMBUS_DEVICE_framebuffer,
-            } device_kind;
-            
-            u32 channel_id;
-            u32 connection_id;
-            u8  monitor_id;
-            
-            u32 gpadl_id;
-            u32 read_ring_buffer_pages;
-            u32 target_vp;
-            
-            struct vmbus_ring_buffer{
-                u64 header;
-                u64 amount_of_pages;
-                u64 *pages;
-            } read_buffer; 
-            struct vmbus_ring_buffer send_buffer;
-            
-        } *channels;
-        
-        struct gpadl{
-            struct gpadl *next;
-            
-            u32 channel_id;
-            u32 gpadl_id;
-            
-            u32 amount_of_pages;
-            u64 pages[];
-            
-        } *gpadls;
-        
-        u64 monitor_page1;
-        u64 monitor_page2;
-        
-        struct vmbus_channel *keyboard;
-        struct vmbus_channel *mouse;
-        
-        int send_packet_skip_interrupt;
-        u32 target_vp;
-        
-        u64 pending_message_reserved;
-        u64 pending_message_send;
-        struct hv_message *pending_messages[16]; // 16 ought to be enough for everybody!
-    } vmbus;
-};
-
-static char *vmbus_device_kind_string[] = {
-    [VMBUS_DEVICE_unknown] = "unknown",
-    [VMBUS_DEVICE_scsi] = "scsi",
-    [VMBUS_DEVICE_mouse] = "mouse",
-    [VMBUS_DEVICE_keyboard] = "keyboard",
-    [VMBUS_DEVICE_framebuffer] = "framebuffer",
 };
 
 static void invalidate_translate_lookaside_buffers(struct context *context){
@@ -800,6 +750,58 @@ struct globals{
         HANDLE file_handle;
     } disk_info;
     
+    struct vmbus{
+        struct vmbus_channel{
+            struct vmbus_channel *next;
+            
+            enum vmbus_device_kind{
+                VMBUS_DEVICE_unknown,
+                VMBUS_DEVICE_scsi,
+                VMBUS_DEVICE_mouse,
+                VMBUS_DEVICE_keyboard,
+                VMBUS_DEVICE_framebuffer,
+            } device_kind;
+            
+            u32 channel_id;
+            u32 connection_id;
+            u8  monitor_id;
+            
+            u32 gpadl_id;
+            u32 read_ring_buffer_pages;
+            u32 target_vp;
+            
+            struct vmbus_ring_buffer{
+                u64 header;
+                u64 amount_of_pages;
+                u64 *pages;
+            } read_buffer; 
+            struct vmbus_ring_buffer send_buffer;
+            
+        } *channels;
+        
+        struct gpadl{
+            struct gpadl *next;
+            
+            u32 channel_id;
+            u32 gpadl_id;
+            
+            u32 amount_of_pages;
+            u64 pages[];
+            
+        } *gpadls;
+        
+        u64 monitor_page1;
+        u64 monitor_page2;
+        
+        struct vmbus_channel *keyboard;
+        struct vmbus_channel *mouse;
+        
+        int send_packet_skip_interrupt;
+        u32 target_vp;
+        
+        struct ticket_spinlock message_lock;
+    } vmbus;
+    
     struct context *main_thread_context;
     struct context *second_thread_context;
     
@@ -815,7 +817,6 @@ struct globals{
     u64 starting_tsc;
     u64 starting_qpc;
 } globals;
-
 
 // :calculate_tsc_frequency_because_windows_wont_tell_me
 // 
@@ -1160,10 +1161,6 @@ struct context *allocate_and_initialize_thread_context(int thread_index){
     context->fuzz_case_timeout = FUZZ_CASE_TIMEOUT;
     
     context_initialize_main_and_thread_context_common(context);
-    
-    // @note: This seems a bit hacky, as the threads share some memory, 
-    //        but I cannot figure out any problems with it, so let's keep it like this for now.
-    context->vmbus = globals.main_thread_context->vmbus;
     
     context->thread_index = thread_index;
     
@@ -1959,7 +1956,7 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         if(use_jit){
             start_execution_jit(context);
         }else{
-            context->Partition = initialize_hypervisor(context);
+            context->Partition = initialize_hypervisor();
             context->thread_index = 0;
             start_execution_hypervisor(context);
         }

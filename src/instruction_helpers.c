@@ -2360,7 +2360,7 @@ void helper_wrmsr(struct context *context, struct registers *registers){
         }break;
         
         case HV_X64_MSR_EOM:{
-            vmbus_handle_end_of_message(context);
+            context->wait_for_eom = false;
         }break;
         case HV_X64_MSR_STIMER0_CONFIG:{
             
@@ -2396,6 +2396,8 @@ void helper_wrmsr(struct context *context, struct registers *registers){
             
             // "The values of ICR high and ICR low are read from or written into the corresponding
             //  APIC ICR high and low registers."
+            
+            // @incomplete: This does not work with smp, but this is not called from the hypervisor.
             
             
             u32 ICR_high = (u32)registers->rdx;
@@ -2554,7 +2556,7 @@ void helper_wrmsr(struct context *context, struct registers *registers){
                 if(context->use_hypervisor){  // In the JIT we want consistency!
                     tsc_frequency = calculate_tsc_frequency();
                     
-                    if(context->vmbus.gpadls == null){
+                    if(globals.vmbus.gpadls == null){
                         // :vmbus_tsc_frequency_hack
                         tsc_frequency *= 20;
                     }
@@ -2669,6 +2671,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             // Send an inter-processor interrupt (IPI) to a target processor.
             //
             crash_assert(Fast);
+            crash_assert(false); // This was not working correctly with SMP, so I turned off the option in the cpuid flags.
             
             struct {
                 u32 Vector;
@@ -2689,7 +2692,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             // @cleanup: We could check the `next_timer_interrupt_time_or_zero` here to figure out more accurate
             //           timing for the timer interrupt.
             
-            helper_immediately_pend_timer_interrupt(context, registers);
+            // helper_immediately_pend_timer_interrupt(context, registers);
         }break;
         
         case /*HvCallPostMessage*/0x5c:{
@@ -2708,7 +2711,9 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 
                 void *payload = input_buffer + 16;
                 
+                ticket_spinlock_lock(&globals.vmbus.message_lock);
                 vmbus_handle_message(context, connection_id, payload, payload_size);
+                ticket_spinlock_unlock(&globals.vmbus.message_lock);
             }else{
                 set_crash_information(context, CRASH_internal_error, (u64)"Unimplemented post message type.");
             }
@@ -2730,8 +2735,9 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 // 
                 // VMBUS connection
                 // 
-                
+                ticket_spinlock_lock(&globals.vmbus.message_lock);
                 vmbus_handle_event(context, connection_id);
+                ticket_spinlock_unlock(&globals.vmbus.message_lock);
                 registers->rax = 0;
                 return;
             }
@@ -2828,7 +2834,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             thread_two->physical_memory_copied      = context->physical_memory_copied;
             thread_two->physical_memory_dirty      = context->physical_memory_dirty;
             thread_two->physical_memory_executed      = context->physical_memory_executed;
-            thread_two->vmbus = context->vmbus;
             
             void context_initialize_main_and_thread_context_common(struct context *context);
             context_initialize_main_and_thread_context_common(thread_two);
@@ -2860,7 +2865,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             thread_two->registers.fs_base = input_buffer->InitialVpContext.fs.base;
             thread_two->registers.gs_base = input_buffer->InitialVpContext.gs.base;
             
-            // @hmm:
             thread_two->registers.ia32_mtrr_cap = context->registers.ia32_mtrr_cap;
             thread_two->registers.ia32_mtrr_def_type = context->registers.ia32_mtrr_def_type;
             thread_two->registers.ia32_mtrr_phys_base = context->registers.ia32_mtrr_phys_base;
@@ -2883,11 +2887,6 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             thread_two->next_timer_interrupt_time_or_zero = 0;
             
-            // 
-            // Aggressively, search out all of the loaded modules.
-            // 
-            // struct loaded_module *nt = maybe_find_nt_and_load_module_list(context);
-            
             globals.second_thread_context = thread_two;
             
             void start_execution_hypervisor(struct context *);
@@ -2909,8 +2908,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
         
         case /*HvCallFlushVirtualAddressSpace*/2:
         case /*HvCallFlushVirtualAddressList*/3:{
-            // Sure buddy :)
-            invalidate_translate_lookaside_buffers(context); // @cleanup?
+            crash_assert(false);
         }break;
         
 #if ENABLE_VSM

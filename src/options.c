@@ -142,6 +142,11 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 // 
 #define ENABLE_SMP 1
 
+// 
+// Print random stuff from the bios. Mostly an option to print-debug the bios.
+// 
+#define ENABLE_BIOS_LOGGING 0
+
 
 //_____________________________________________________________________________________________________________________
 // Debugging options

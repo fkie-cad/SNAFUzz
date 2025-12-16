@@ -150,8 +150,8 @@ int load_snapshot(struct context *context, char *file_name){
         u64 *vmbus_section_start = (u64 *)(file.memory + directory[1].start_offset);
         
         // Clear the old state.
-        context->vmbus.channels = null;
-        context->vmbus.gpadls   = null;
+        globals.vmbus.channels = null;
+        globals.vmbus.gpadls   = null;
         
         u64 amount_of_channels = vmbus_section_start[0];
         u64 amount_of_gpadls   = vmbus_section_start[1];
@@ -159,8 +159,8 @@ int load_snapshot(struct context *context, char *file_name){
         u64 monitor_page2      = vmbus_section_start[3];
         u64 pending_messages   = vmbus_section_start[4];
         
-        context->vmbus.monitor_page1 = monitor_page1;
-        context->vmbus.monitor_page2 = monitor_page2;
+        globals.vmbus.monitor_page1 = monitor_page1;
+        globals.vmbus.monitor_page2 = monitor_page2;
         
         u32 *at = (u32 *)(vmbus_section_start + 5);
         
@@ -169,8 +169,8 @@ int load_snapshot(struct context *context, char *file_name){
         for(u64 index = 0; index < amount_of_channels; index++){
             struct vmbus_channel *channel = push_struct(&context->permanent_arena, struct vmbus_channel);
             
-            channel->next = context->vmbus.channels;
-            context->vmbus.channels = channel;
+            channel->next = globals.vmbus.channels;
+            globals.vmbus.channels = channel;
             
             channel->device_kind   = *at++;
             channel->channel_id    = *at++;
@@ -195,18 +195,26 @@ int load_snapshot(struct context *context, char *file_name){
             memcpy(gpadl->pages, pages_at, amount_of_pages * sizeof(gpadl->pages[0]));
             pages_at += amount_of_pages;
             
-            gpadl->next = context->vmbus.gpadls;
-            context->vmbus.gpadls = gpadl;
+            gpadl->next = globals.vmbus.gpadls;
+            globals.vmbus.gpadls = gpadl;
         }
         
         u8 *message_at = (u8 *)pages_at;
         for(u32 index = 0; index < pending_messages; index++){
+            u32 event_flag = *(u32 *)(message_at + 0);
+            u32 sint_index = *(u32 *)(message_at + 4);
+            message_at += 8;
+            
             struct hv_message *message = (void *)message_at;
-            context->vmbus.pending_messages[index] = message;
+            context->pending_messages[index] = (struct pending_message){
+                .event_flag = event_flag,
+                .sint_index = sint_index,
+                .message = message,
+            };
             
             message_at += sizeof(*message) + message->payload_size;
         }
-        context->vmbus.pending_message_reserved = pending_messages;
+        context->pending_message_reserved = pending_messages;
         
         assert((void *)message_at == (void *)(file.memory + directory[1].end_offset));
         
@@ -214,8 +222,8 @@ int load_snapshot(struct context *context, char *file_name){
         // Initialize the 'read_buffer' and 'send_buffer' for each channel.
         // 
         
-        for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
-            struct gpadl *gpadl = context->vmbus.gpadls;
+        for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
+            struct gpadl *gpadl = globals.vmbus.gpadls;
             
             // Search for the corresponding gpadl.
             for(; gpadl; gpadl = gpadl->next){
@@ -234,8 +242,8 @@ int load_snapshot(struct context *context, char *file_name){
             //        otherwise we might try to send inputs before there is a gpadl and that might crash.
             //        If there is no gpadl, this was likely a snapshot prior to the guest opening the channel.
             // 
-            if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
-            if(channel->device_kind == VMBUS_DEVICE_keyboard) context->vmbus.keyboard = channel;
+            if(channel->device_kind == VMBUS_DEVICE_mouse)    globals.vmbus.mouse = channel;
+            if(channel->device_kind == VMBUS_DEVICE_keyboard) globals.vmbus.keyboard = channel;
         }
     }
     
@@ -371,18 +379,17 @@ void write_snapshot(struct context *context, char *file_name){
     u64 amount_of_gpadl_pages = 0;
     u64 pending_messages_size = 0;
     
-    for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
+    for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
         amount_of_channels += 1;
     }
     
-    for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
+    for(struct gpadl *gpadl = globals.vmbus.gpadls; gpadl; gpadl = gpadl->next){
         amount_of_gpadls += 1;
         amount_of_gpadl_pages += gpadl->amount_of_pages;
     }
     
-    for(u64 pending_message = context->vmbus.pending_message_send; pending_message < context->vmbus.pending_message_reserved; pending_message += 1){
-        struct hv_message *message = context->vmbus.pending_messages[pending_message % array_count(context->vmbus.pending_messages)];
-        pending_messages_size += sizeof(*message) + message->payload_size;
+    for(u64 pending_message = context->pending_message_send; pending_message < context->pending_message_reserved; pending_message += 1){
+        pending_messages_size += 2 * sizeof(u32) + sizeof(struct hv_message) + context->pending_messages[pending_message % array_count(context->pending_messages)].message->payload_size;
     }
     
     // 
@@ -514,13 +521,13 @@ void write_snapshot(struct context *context, char *file_name){
     } vmbus_header = {
         .amount_of_channels = amount_of_channels,
         .amount_of_gpadls   = amount_of_gpadls,
-        .monitor_page1 = context->vmbus.monitor_page1,
-        .monitor_page2 = context->vmbus.monitor_page2,
-        .amount_of_pending_messages = context->vmbus.pending_message_reserved - context->vmbus.pending_message_send,
+        .monitor_page1 = globals.vmbus.monitor_page1,
+        .monitor_page2 = globals.vmbus.monitor_page2,
+        .amount_of_pending_messages = context->pending_message_reserved - context->pending_message_send,
     };
     fwrite(&vmbus_header, sizeof(vmbus_header), 1, file);
     
-    for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
+    for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
         
         struct{
             u32 device_kind;
@@ -541,7 +548,7 @@ void write_snapshot(struct context *context, char *file_name){
         fwrite(&channel_info, sizeof(channel_info), 1, file);
     }
     
-    for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
+    for(struct gpadl *gpadl = globals.vmbus.gpadls; gpadl; gpadl = gpadl->next){
         struct{
             u32 channel_id;
             u32 gpadl_id;
@@ -557,12 +564,15 @@ void write_snapshot(struct context *context, char *file_name){
     
     if(amount_of_gpadls & 1) fwrite(zero_buffer, sizeof(u32), 1, file);
     
-    for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
+    for(struct gpadl *gpadl = globals.vmbus.gpadls; gpadl; gpadl = gpadl->next){
         fwrite(gpadl->pages, sizeof(u64), gpadl->amount_of_pages, file);
     }
     
-    for(u64 pending_message = context->vmbus.pending_message_send; pending_message < context->vmbus.pending_message_reserved; pending_message += 1){
-        struct hv_message *message = context->vmbus.pending_messages[pending_message % array_count(context->vmbus.pending_messages)];
+    for(u64 pending_message_index = context->pending_message_send; pending_message_index < context->pending_message_reserved; pending_message_index += 1){
+        struct pending_message *pending_message = &context->pending_messages[pending_message_index % array_count(context->pending_messages)];
+        struct hv_message *message = pending_message->message;
+        
+        fwrite(pending_message, sizeof(u32), 2, file);
         fwrite(message, sizeof(*message) + message->payload_size, 1, file);
     }
     

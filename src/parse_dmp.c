@@ -1185,8 +1185,8 @@ int parse_dmp(struct context *context, char *file_name){
                 gpadl->pages[page_index++] = translate_page_number_to_physical(context, ring_buffer.buffer1/0x1000 + index, PERMISSION_read, &pte) / 0x1000;
             }
             
-            gpadl->next           = context->vmbus.gpadls;
-            context->vmbus.gpadls = gpadl;
+            gpadl->next          = globals.vmbus.gpadls;
+            globals.vmbus.gpadls = gpadl;
             
             // 
             // @note: Let's pray this is enough to make everything sort of work :)
@@ -1201,11 +1201,11 @@ int parse_dmp(struct context *context, char *file_name){
             
             vmbus_channel_initialize_ringbuffers(channel, gpadl);
             
-            channel->next = context->vmbus.channels;
-            context->vmbus.channels = channel;
+            channel->next = globals.vmbus.channels;
+            globals.vmbus.channels = channel;
             
-            if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
-            if(channel->device_kind == VMBUS_DEVICE_keyboard) context->vmbus.keyboard = channel;
+            if(channel->device_kind == VMBUS_DEVICE_mouse)    globals.vmbus.mouse = channel;
+            if(channel->device_kind == VMBUS_DEVICE_keyboard) globals.vmbus.keyboard = channel;
         }
         
     } while(false);

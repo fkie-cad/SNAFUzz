@@ -3,6 +3,15 @@ int hacky_display_input_handling(struct context *context){
     
     if(events_processed == events_initiated) return 0;
     
+    ticket_spinlock_lock(&globals.vmbus.message_lock);
+    
+    if(events_processed == events_initiated){
+        ticket_spinlock_unlock(&globals.vmbus.message_lock);
+        return 0;
+    }
+    
+    int success = 0;
+    
     //
     // Check for pending keyboard/mouse updates.
     //
@@ -13,8 +22,7 @@ int hacky_display_input_handling(struct context *context){
     switch(event.kind){
         
         case HACKY_EVENT_key_event:{
-            
-            if(!context->vmbus.keyboard) return 0; // @cleanup:
+            if(!globals.vmbus.keyboard) break;
             
             u16 keycode = event.keycode;
             
@@ -39,13 +47,14 @@ int hacky_display_input_handling(struct context *context){
                 .information = (keycode >> 8),
             }; 
             
-            vmbus_send_packet(context, context->vmbus.keyboard, &keystroke.description);
-            return 1;
+            vmbus_send_packet(context, globals.vmbus.keyboard, &keystroke.description);
+            success = 1;
+            
         }break;
         
         case HACKY_EVENT_mouse_move:
         case HACKY_EVENT_mouse_event:{
-            if(!context->vmbus.mouse) return 0; // @cleanup:
+            if(!globals.vmbus.mouse) break;
             
             if(PRINT_INPUT_EVENTS || PRINT_HOOK_EVENTS) print("[input] Send mouse event {.x = 0x%x .y = 0x%x, .z = 0x%x, .button = 0x%x}\n", 
                     event.mouse_x, event.mouse_y, event.wheel, event.button);
@@ -104,12 +113,12 @@ int hacky_display_input_handling(struct context *context){
                 .wheel_high = (u8)(event.wheel >> 8),
             };
             
-            vmbus_send_packet(context, context->vmbus.mouse, &mouse_event.description);
-            
-            return 1;
+            vmbus_send_packet(context, globals.vmbus.mouse, &mouse_event.description);
+            success = 1;
         }break;
     }
     
-    return 0;
+    ticket_spinlock_unlock(&globals.vmbus.message_lock);
+    return success;
 }
 

@@ -4863,11 +4863,11 @@ void handle_debugger(struct context *context){
         
         if(string_match(command, string("vmbus"))){
             
-            print("monitor_page1 = %p\n", context->vmbus.monitor_page1);
-            print("monitor_page2 = %p\n", context->vmbus.monitor_page2);
+            print("monitor_page1 = %p\n", globals.vmbus.monitor_page1);
+            print("monitor_page2 = %p\n", globals.vmbus.monitor_page2);
             
             print("Channels:\n");
-            for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
+            for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
                 
                 char *device_kind_string = "???";
                 if(channel->device_kind == VMBUS_DEVICE_unknown)     device_kind_string = "unknown";
@@ -4892,7 +4892,7 @@ void handle_debugger(struct context *context){
             }
             
             print("Gpadls:\n");
-            for(struct gpadl *gpadl = context->vmbus.gpadls; gpadl; gpadl = gpadl->next){
+            for(struct gpadl *gpadl = globals.vmbus.gpadls; gpadl; gpadl = gpadl->next){
                 print("[0x%x] = {\n", gpadl->gpadl_id);
                 print("    .channel_id = %x\n", gpadl->channel_id);
                 print("    .pages:\n");

@@ -9,7 +9,6 @@
 //    * Glue code (EFI-protocol stuff).
 // 
 
-
 typedef _Bool boolean;
 
 typedef unsigned char    u8;
@@ -21,6 +20,8 @@ typedef signed char    s8;
 typedef signed short   s16;
 typedef signed int     s32;
 typedef signed __int64 s64;
+
+#include "options.c"
 
 int _fltused;
 
@@ -116,8 +117,6 @@ typedef s64 efi_status;
 //_____________________________________________________________________________________________________________________
 // Bios escapes.
 #include "uefi_bios.h"
-
-#define ENABLE_BIOS_LOGGING 0
 
 #if ENABLE_BIOS_LOGGING
 #define STB_SPRINTF_DECORATE(name) name

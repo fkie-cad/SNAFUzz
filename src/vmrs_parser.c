@@ -557,8 +557,8 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
                         print("VMRS Warning: VMBUS version differs from expected (%d.%d vs 5.2 (expected))\n", major_version, minor_version);
                     }
                     
-                    context->vmbus.monitor_page1 = *(u64 *)(data +  8);
-                    context->vmbus.monitor_page2 = *(u64 *)(data + 16);
+                    globals.vmbus.monitor_page1 = *(u64 *)(data +  8);
+                    globals.vmbus.monitor_page2 = *(u64 *)(data + 16);
                     
                     // print_byte_range(entry_data, entry_size, 0);
                 }else if(context_number == 1){
@@ -596,8 +596,8 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
                         print("    monitor_id %u\n", monitor_id);
 #endif
                         
-                        channel->next = context->vmbus.channels;
-                        context->vmbus.channels = channel;
+                        channel->next = globals.vmbus.channels;
+                        globals.vmbus.channels = channel;
                         
                         offset += size;
                     }
@@ -622,8 +622,8 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
                     gpadl->amount_of_pages = (u32)amount_of_pages; // @cleanup: Maybe get rid of this cast?
                     memcpy(gpadl->pages, data + 0x20, amount_of_pages*sizeof(u64));
                     
-                    gpadl->next = context->vmbus.gpadls;
-                    context->vmbus.gpadls = gpadl;
+                    gpadl->next = globals.vmbus.gpadls;
+                    globals.vmbus.gpadls = gpadl;
                     
 #if 0
                     print("gpadl %u:\n", gpadl_id);
@@ -797,7 +797,7 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
         }
     }
     
-    for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
+    for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
         
         // 
         // This can apparently happen.
@@ -808,7 +808,7 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
         // Set up the read and send buffer of the vmbus channels.
         // 
         
-        struct gpadl *gpadl = context->vmbus.gpadls;
+        struct gpadl *gpadl = globals.vmbus.gpadls;
         for(; gpadl; gpadl = gpadl->next){
             if(gpadl->channel_id == channel->channel_id && gpadl->gpadl_id == channel->gpadl_id) break;
         }
@@ -826,8 +826,8 @@ int parse_vmrs(struct context *context, char *vmrs_file_name){
         // see :feat_pending_send_sz in vmbus.c
         *(u8 *)(context->physical_memory + channel->send_buffer.header + 0x40) = 1;
         
-        if(channel->device_kind == VMBUS_DEVICE_mouse)    context->vmbus.mouse = channel;
-        if(channel->device_kind == VMBUS_DEVICE_keyboard) context->vmbus.keyboard = channel;
+        if(channel->device_kind == VMBUS_DEVICE_mouse)    globals.vmbus.mouse = channel;
+        if(channel->device_kind == VMBUS_DEVICE_keyboard) globals.vmbus.keyboard = channel;
         
     }
     

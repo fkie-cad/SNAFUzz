@@ -47,7 +47,7 @@
 //                                               - Pascal Beyer 29.02.2024
 // 
 
-HANDLE initialize_hypervisor(struct context *context){
+HANDLE initialize_hypervisor(void){
     
     HANDLE Partition;
     s32 Result;
@@ -208,12 +208,12 @@ HANDLE initialize_hypervisor(struct context *context){
     // Then, we can handle the I/O-Apic read/write from there.
     WHvUnmapGpaRange(Partition, 0xfec00000, 0x1000);
     
-    if(context->vmbus.monitor_page1){
-        WHvUnmapGpaRange(Partition, context->vmbus.monitor_page1, 0x1000);
+    if(globals.vmbus.monitor_page1){
+        WHvUnmapGpaRange(Partition, globals.vmbus.monitor_page1, 0x1000);
     }
     
-    if(context->vmbus.monitor_page2){
-        WHvUnmapGpaRange(Partition, context->vmbus.monitor_page2, 0x1000);
+    if(globals.vmbus.monitor_page2){
+        WHvUnmapGpaRange(Partition, globals.vmbus.monitor_page2, 0x1000);
     }
     
     globals.debugger_event = CreateEventA(null, 0, 0, null);
@@ -1076,13 +1076,13 @@ void start_execution_hypervisor(struct context *context){
                         handle_debugger(context);
                     }
                     
-                }else if(guest_physical_address == context->vmbus.monitor_page2 || guest_physical_address == context->vmbus.monitor_page1){
+                }else if(guest_physical_address == globals.vmbus.monitor_page2 || guest_physical_address == globals.vmbus.monitor_page1){
                     
                     // @cleanup: Maybe I should rename them into monitor_page0 and monitor_page1?
-                    int monitor_id = (guest_physical_address == context->vmbus.monitor_page2) ? 1 : 0;
+                    int monitor_id = (guest_physical_address == globals.vmbus.monitor_page2) ? 1 : 0;
                     int handled = 0;
                     
-                    for(struct vmbus_channel *channel = context->vmbus.channels; channel; channel = channel->next){
+                    for(struct vmbus_channel *channel = globals.vmbus.channels; channel; channel = channel->next){
                         if(channel->monitor_id == monitor_id){
                             vmbus_handle_event(context, channel->connection_id);
                             handled = 1;
@@ -1175,7 +1175,7 @@ void start_execution_hypervisor(struct context *context){
                         
                         print("Reset!\n");
                         
-                        memset(&context->vmbus, 0, sizeof(context->vmbus));
+                        memset(&globals.vmbus, 0, sizeof(globals.vmbus));
                         memset(&context->registers, 0, sizeof(context->registers));
                         invalidate_translate_lookaside_buffers(context);
                         efi_setup_initial_state(context);
@@ -1198,7 +1198,7 @@ void start_execution_hypervisor(struct context *context){
                             print("WHvDeletePartition failed with hresutl 0x%x\n", WHvDeletePartitionResult);
                         }
                         
-                        context->Partition = initialize_hypervisor(context);
+                        context->Partition = initialize_hypervisor();
                         
                         continue;
                     }
@@ -1540,15 +1540,8 @@ void start_execution_hypervisor(struct context *context){
                     }
                 }
                 
-                if(context->vmbus.pending_message_send < context->vmbus.pending_message_reserved){
-                    u8 *message_page = get_physical_memory_for_write(context, context->registers.hv_x64_msr_simp & ~0xfff);
-                    
-                    u32 synthetic_interrupt_number = /*VMBUS_SINT*/2; // @cleanup: Where should this come from?
-                    
-                    struct hv_message *message = (void *)(message_page + 0x100 * synthetic_interrupt_number);
-                    if(message->message_type == 0){
-                        vmbus_handle_end_of_message(context);
-                    }
+                if(!context->wait_for_eom && context->pending_message_send < context->pending_message_reserved){
+                    vmbus_process_pending_messages(context);
                 }
                 
                 // Don't allow any async events, while we are single stepping.
