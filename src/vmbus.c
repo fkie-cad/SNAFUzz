@@ -652,34 +652,33 @@ void vmbus_handle_message(struct context *context, u32 connection_id, void *payl
             
             sint_post_message(context, globals.vmbus.target_vp, /*VMBUS_SINT*/2, /*event_flag*/0, /*HV_MESSAGE_VMBUS*/1, &gpadl_created, sizeof(gpadl_created));
             
-            if(gpadl->next && gpadl->next->next == null && context->use_hypervisor){
-                // :vmbus_tsc_frequency_hack
-                // 
-                // We are the first gpadl, patch in the _correct_ value for the tsc frequency.
-                // The guest should now have initialized the vmbus.
-                
-                if(context->registers.hv_x64_msr_reference_tsc_page & 1){
-                    u64 physical_address = context->registers.hv_x64_msr_reference_tsc_page & ~0xfff;
-                    u8 *tsc_page = get_physical_memory_for_write(context, physical_address);
-                    
-                    u64 old_time = calculate_time_reference_counter(context, &context->registers);
-                    
-                    u64 tsc_frequency = calculate_tsc_frequency();
-                    
-                    u64 remainder;
-                    u64 scale = _udiv128(/*high*/10000000, /*low*/0, tsc_frequency, &remainder); // @cleanup: Make sure this does not crash?
-                    
-                    if(PRINT_TIMER_EVENTS) print("Reversing tsc hack now tsc frequency at 0x%llx tsc scale 0x%llx\n", tsc_frequency, scale);
-                    
-                    *(u64 *)(tsc_page + 0) += 1;
-                    *(u64 *)(tsc_page + 8)  = scale;
-                    
-                    u64 new_time = calculate_time_reference_counter(context, &context->registers);
-                    
-                    *(u64 *)(tsc_page + 16) = old_time - new_time;
-                }
-            }
-            
+            // if(gpadl->next && gpadl->next->next == null && context->use_hypervisor){
+            //     // :vmbus_tsc_frequency_hack
+            //     // 
+            //     // We are the first gpadl, patch in the _correct_ value for the tsc frequency.
+            //     // The guest should now have initialized the vmbus.
+            //     
+            //     if(context->registers.hv_x64_msr_reference_tsc_page & 1){
+            //         u64 physical_address = context->registers.hv_x64_msr_reference_tsc_page & ~0xfff;
+            //         u8 *tsc_page = get_physical_memory_for_write(context, physical_address);
+            //         
+            //         u64 old_time = calculate_time_reference_counter(context, &context->registers);
+            //         
+            //         u64 tsc_frequency = calculate_tsc_frequency();
+            //         
+            //         u64 remainder;
+            //         u64 scale = _udiv128(/*high*/10000000, /*low*/0, tsc_frequency, &remainder); // @cleanup: Make sure this does not crash?
+            //         
+            //         if(PRINT_TIMER_EVENTS) print("Reversing tsc hack now tsc frequency at 0x%llx tsc scale 0x%llx\n", tsc_frequency, scale);
+            //         
+            //         *(u64 *)(tsc_page + 0) += 1;
+            //         *(u64 *)(tsc_page + 8)  = scale;
+            //         
+            //         u64 new_time = calculate_time_reference_counter(context, &context->registers);
+            //         
+            //         *(u64 *)(tsc_page + 16) = old_time - new_time;
+            //     }
+            // }
         }break;
         
         case /*VMBUS_MSG_OPEN_CHANNEL*/5:{

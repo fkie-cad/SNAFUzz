@@ -2558,7 +2558,7 @@ void helper_wrmsr(struct context *context, struct registers *registers){
                     
                     if(globals.vmbus.gpadls == null){
                         // :vmbus_tsc_frequency_hack
-                        tsc_frequency *= 20;
+                        // tsc_frequency *= 20;
                     }
                 }
                 
