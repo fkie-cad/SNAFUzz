@@ -86,7 +86,7 @@ void sint_post_message(struct context *context, u32 target_vp, u32 synthetic_int
     
     if(!(registers->hv_x64_msr_simp & 1)) return;
     
-    if(context->thread_index != (int)target_vp){
+    if(context->processor_index != (int)target_vp){
         
         struct hv_message *message = 0;
         if(message_type){
@@ -247,7 +247,7 @@ void vmbus_send_packet(struct context *context, struct vmbus_channel *channel, s
     u64 size_used = (read_index <= write_index) ? (write_index - read_index) : ((channel_size - read_index) + write_index);
     u64 size_left = channel_size - size_used;
     
-    if(PRINT_VMBUS_EVENTS) print("["__FUNCTION__"] [%d] DeviceKind %s(%x) %x %x %llx %llx %llx\n", context->thread_index, vmbus_device_kind_string[channel->device_kind], channel->device_kind, write_index, read_index, channel_size, size_used, size_left);
+    if(PRINT_VMBUS_EVENTS) print("["__FUNCTION__"] [%d] DeviceKind %s(%x) %x %x %llx %llx %llx\n", context->processor_index, vmbus_device_kind_string[channel->device_kind], channel->device_kind, write_index, read_index, channel_size, size_used, size_left);
     
     crash_assert(packet_size <= size_left); 
     
@@ -1626,9 +1626,7 @@ void vmbus_handle_event(struct context *context, u32 connection_id){
                         // 
                         // @note: hack to prevent the double interrupt sending. @cleanup: This should not be necessary anymore.
                         // 
-                        context->send_packet_skip_interrupt = 1;
                         vmbus_pipe_send_packet(context, channel, &version_response, 0xd);
-                        context->send_packet_skip_interrupt = 0;
                         
                         struct synthhid_initial_device_info{
                             struct synthhid_message_header synthhid_header;

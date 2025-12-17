@@ -528,7 +528,7 @@ int hypervisor_set_breakpoint_on_next_instruction(struct context *context, struc
     return hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, next_rip, 1, (struct string){0});
 }
 
-void update_exception_exit_bitmap(struct context *context);
+void update_exception_exit_bitmap(void);
 
 //_____________________________________________________________________________________________________________________
 // Parsing addresses
@@ -2271,7 +2271,7 @@ void handle_debugger(struct context *context){
         struct context *other = (context == globals.main_thread_context) ? globals.second_thread_context : globals.main_thread_context;
         
         do{
-            s32 CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/other->thread_index, /*Flags (must be zero)*/0);
+            s32 CancelResult = WHvCancelRunVirtualProcessor(globals.Partition, /*virtual processor index*/other->processor_index, /*Flags (must be zero)*/0);
             if(CancelResult) print("CancelResult %x\n", CancelResult);
             
             Sleep(1);
@@ -5101,7 +5101,7 @@ void handle_debugger(struct context *context){
         
         // To reduce the amount of Vmexits we have to perform, we update the exception bitmap to not 
         // only include breakpoints when we are not single stepping. Only applicable to hyperv...
-        update_exception_exit_bitmap(context);
+        update_exception_exit_bitmap();
         
         if(globals.single_stepping) hypervisor_set_breakpoint_on_next_instruction(context, &context->registers);
     }else{
@@ -5119,12 +5119,12 @@ void handle_debugger(struct context *context){
     snapshot_mode_currently_in_debugger = false;
     
     struct whv_register_value tsc = {registers->ia32_tsc};
-    s32 Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/0, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
+    s32 Result = WHvSetVirtualProcessorRegisters(globals.Partition, /*VirtualProcessorIndex*/0, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
     if(Result < 0){
         print("[WHvSetVirtualProcessorRegisters] Could not set rip.\n");
     }
     
-    Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/1, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
+    Result = WHvSetVirtualProcessorRegisters(globals.Partition, /*VirtualProcessorIndex*/1, &(u32){/*WHvX64RegisterTsc*/0x00002000}, 1, &tsc);
     if(Result < 0){
         print("[WHvSetVirtualProcessorRegisters] Could not set rip.\n");
     }

@@ -965,8 +965,8 @@ void helper_cpuid(struct context *context, struct registers *registers){
             // EDX - Feature Information
             
             // rax=00000000000906ed rbx=0000000000010800 rcx=00000000feda3203 rdx=000000000f8bfbff
-            rax =    0x906ed;
-            rbx =    0x10800;
+            rax = /*Extended Model ID*/(0x9<<16)  | /*Processor Type*/(0<<12) | /*Familiy ID*/(6<<8) | /*Model*/(0xe<<4) | /*Stepping ID*/0xd;
+            rbx = /*Initial Local APIC ID*/(context->processor_index << 24) | /*Hyper threading (?) */0x1 | /*CLFLUSH line size (cach line size = 64)*/(0x08 << 8) | /*BrandIndex*/0x00;
             
             // RCX:
             //     0 - SSE
@@ -1556,7 +1556,7 @@ void helper_cpuid(struct context *context, struct registers *registers){
                     /*injecting synthetic machine checks*/(1 << 9) | 
                     /*guest crash msr*/(1 << 10) | 
                     // /*NPIEP*/(1 << 12) | 
-                    // /*ExtendedGvaRangesForFlushVirtualAddressList*/(1 << 14) | 
+                    /*ExtendedGvaRangesForFlushVirtualAddressList*/(1 << 14) | 
                     /*Hypercall output XMM*/(1 << 15) | 
                     /*Sint polling*/(1 << 17) | 
                     /*HypercallMsrLock*/(1 << 18) | 
@@ -1802,7 +1802,7 @@ void pend_timer_interrupt(struct context *context, struct registers *registers, 
         },
     };
     
-    if(PRINT_TIMER_EVENTS) print("[" __FUNCTION__ "] [%d] interrupt time %f\n", context->thread_index, time * 100.0 / 1.0e+9);
+    if(PRINT_TIMER_EVENTS) print("[" __FUNCTION__ "] [%d] interrupt time %f\n", context->processor_index, time * 100.0 / 1.0e+9);
     
     //
     // Write the timer message to the 'sint_message_page' where the guest can then read it.
@@ -2689,10 +2689,35 @@ void helper_vmcall(struct context *context, struct registers *registers){
         
         case /*HvCallNotifyLongSpinWait*/0x8:{
             
-            // @cleanup: We could check the `next_timer_interrupt_time_or_zero` here to figure out more accurate
-            //           timing for the timer interrupt.
+            // @note: When we are single-core, we are probabaly waiting for some other code to run and can thus just queue a timer interrupt.
+            //        This caused problems, now that there is _some_ support for SMP (more than one core).
+            //        So I have for now disabled it when we use the hypervisor.
+            if(!context->use_hypervisor){
+                // @cleanup: We could check the `next_timer_interrupt_time_or_zero` here to figure out more accurate
+                //           timing for the timer interrupt.
+                helper_immediately_pend_timer_interrupt(context, registers);
+            }
             
-            // helper_immediately_pend_timer_interrupt(context, registers);
+            if(context->vtl_not_initialized){
+                // 
+                // If secure-mode is enabled, `HvEnableVpVtl` is called before `HvCallStartVirtualProcessor`,
+                // initializing the vtl state to some startup code. It then starts the processor in VTL0.
+                // After running for a while, the new processor does its first vtl transition on a random call to `KeAddProcessorAffinityEx`,
+                // intercepting a write to CR4. I don't think we can (using the Windows Hypervisor Platform APIs) intercept writes to control registers.
+                // Therefore, we will not execute this transition.
+                // 
+                // Eventually, after running for a while, the new core will hit this code path, while core 0 is still sitting inside the securekernel,
+                // waiting for the startup code in VTL1 to run. So if this is the case, we execute a Vtl-transition here, to initialize the new Core.
+                // 
+                //                                                                           - Pascal Beyer 17.12.2025
+                // 
+                
+                context->registers.rip += 3; // @hmm
+                
+                context->registers.vtl_state.current_vtl += 1;
+                switch_vtl(&context->registers);
+                context->vtl_not_initialized = 0;
+            }
         }break;
         
         case /*HvCallPostMessage*/0x5c:{
@@ -2806,7 +2831,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 } InitialVpContext;
             } *input_buffer = (void *)get_physical_memory_for_read(context, input_gpa);
             
-            if(PRINT_HOOK_EVENTS){
+            if(PRINT_STARTUP_EVENTS || PRINT_HOOK_EVENTS){
                 print("HvCallStartVirtualProcessor:\n");
                 print("    PartitionId %p VpIndex %u TargetVtl %u\n", input_buffer->PartitionId, input_buffer->VpIndex, input_buffer->TargetVtl);
                 print("    Rip %p Rsp %p Rflags %p\n", input_buffer->InitialVpContext.rip, input_buffer->InitialVpContext.rsp, input_buffer->InitialVpContext.rflags);
@@ -2823,20 +2848,8 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 print("    efer %p, cr0 %p, cr3 %p, cr4 %p, pat %p\n", input_buffer->InitialVpContext.efer, input_buffer->InitialVpContext.cr0, input_buffer->InitialVpContext.cr3, input_buffer->InitialVpContext.cr4, input_buffer->InitialVpContext.pat);
             }
             
-            // Well we don't know how to do this factoring Xd.
-            struct context *thread_two = os_allocate_memory(sizeof(*context));
-            
-            thread_two->Partition = context->Partition;
-            thread_two->thread_index = 1;
-            thread_two->snapshot_mode = 1;
-            thread_two->physical_memory_size = context->physical_memory_size;
-            thread_two->physical_memory      = context->physical_memory;
-            thread_two->physical_memory_copied      = context->physical_memory_copied;
-            thread_two->physical_memory_dirty      = context->physical_memory_dirty;
-            thread_two->physical_memory_executed      = context->physical_memory_executed;
-            
-            void context_initialize_main_and_thread_context_common(struct context *context);
-            context_initialize_main_and_thread_context_common(thread_two);
+            struct context *thread_two = globals.second_thread_context_temp;
+            globals.second_thread_context = thread_two;
             
             thread_two->registers.rip = input_buffer->InitialVpContext.rip;
             thread_two->registers.rsp = input_buffer->InitialVpContext.rsp;
@@ -2887,7 +2900,10 @@ void helper_vmcall(struct context *context, struct registers *registers){
             
             thread_two->next_timer_interrupt_time_or_zero = 0;
             
-            globals.second_thread_context = thread_two;
+            if(ENABLE_VSM){
+                thread_two->vtl_not_initialized = 1;
+                thread_two->vtl0_permissions = context->vtl0_permissions;
+            }
             
             void start_execution_hypervisor(struct context *);
             CreateThread(null, 0, (u32 (*)(void *))(void *)start_execution_hypervisor, thread_two, 0, 0);
@@ -2908,7 +2924,13 @@ void helper_vmcall(struct context *context, struct registers *registers){
         
         case /*HvCallFlushVirtualAddressSpace*/2:
         case /*HvCallFlushVirtualAddressList*/3:{
-            crash_assert(false);
+            // 
+            // I am not sure what we need to do here, if anything?
+            // 
+            crash_assert(context->registers.vtl_state.current_vtl == 1); // Only allow this from securekernel.
+            invalidate_translate_lookaside_buffers(context);
+            // if(CallCode == 2) print("HvCallFlushVirtualAddressSpace from vtl %d\n", context->registers.vtl_state.current_vtl);
+            // if(CallCode == 3) print("HvCallFlushVirtualAddressList  from vtl %d\n", context->registers.vtl_state.current_vtl);
         }break;
         
 #if ENABLE_VSM
@@ -2999,7 +3021,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 if(Parameters->MapFlags & 0x8) flags |= 4;
                 
                 if(context->use_hypervisor){
-                    s32 WHvMapGpaRangeResult = WHvMapGpaRange(context->Partition, SourceAddress, Gpa, 0x1000, flags);
+                    s32 WHvMapGpaRangeResult = WHvMapGpaRange(globals.Partition, SourceAddress, Gpa, 0x1000, flags);
                     if(WHvMapGpaRangeResult != 0){
                         print("WHvMapGpaRangeResult = %x (%p %p 0x1000, %x)\n", WHvMapGpaRangeResult, SourceAddress, Gpa, flags);
                     }
@@ -3228,7 +3250,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved2 : 54;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HV_REGISTER_VSM_PARTITION_CONFIG:\n");
                         print("    config->EnableVtlProtection = %llx\n", config->EnableVtlProtection);
                         print("    config->DefaultVtlProtectionMask = %llx\n", config->DefaultVtlProtectionMask);
@@ -3246,7 +3268,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved : 62;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HvRegisterVsmVpSecureConfigVtl0:\n");
                         print("    config->MbecEnabled = %llx\n", config->MbecEnabled);
                         print("    config->TlbLocked = %llx\n", config->TlbLocked);
@@ -3263,7 +3285,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                         u64 Reserved : 52;
                     } *config = (void *)&Parameters->mapping[0].value_low;
                     
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HvRegisterVsmVina:\n");
                         print("    config->Vector = %llx\n", config->Vector);
                         print("    config->Enabled = %llx\n", config->Enabled);
@@ -3273,25 +3295,79 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 }break;
                 
                 case /*HvX64RegisterCrInterceptControl*/0xE0000:{
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
+                        
+                        struct{
+                            u64 Cr0Write : 1;
+                            u64 Cr4Write : 1;
+                            u64 XCr0Write : 1;
+                            u64 IA32MiscEnableRead : 1;
+                            u64 IA32MiscEnableWrite : 1;
+                            u64 MsrLstarRead : 1;
+                            u64 MsrLstarWrite : 1;
+                            u64 MsrStarRead : 1;
+                            u64 MsrStarWrite : 1;
+                            u64 MsrCstarRead : 1;
+                            u64 MsrCstarWrite : 1;
+                            u64 ApicBaseMsrRead : 1;
+                            u64 ApicBaseMsrWrite : 1;
+                            u64 MsrEferRead : 1;
+                            u64 MsrEferWrite : 1;
+                            u64 GdtrWrite : 1;
+                            u64 IdtrWrite : 1;
+                            u64 LdtrWrite : 1;
+                            u64 TrWrite : 1;
+                            u64 MsrSysenterCsWrite : 1;
+                            u64 MsrSysenterEipWrite : 1;
+                            u64 MsrSysenterEspWrite : 1;
+                            u64 MsrSfmaskWrite : 1;
+                            u64 MsrTscAuxWrite : 1;
+                            u64 MsrSgxLaunchControlWrite : 1;
+                            u64 RsvdZ : 39;
+                        } *Intercepts = (void *)&Parameters->mapping[0].value_low;
+                        
                         print("HvX64RegisterCrInterceptControl:\n");
-                        print("    %p\n", Parameters->mapping[0].value_low); // ?
+                        print("    Cr0Write = %u\n", Intercepts->Cr0Write);
+                        print("    Cr4Write = %u\n", Intercepts->Cr4Write);
+                        print("    XCr0Write = %u\n", Intercepts->XCr0Write);
+                        print("    IA32MiscEnableRead = %u\n", Intercepts->IA32MiscEnableRead);
+                        print("    IA32MiscEnableWrite = %u\n", Intercepts->IA32MiscEnableWrite);
+                        print("    MsrLstarRead = %u\n", Intercepts->MsrLstarRead);
+                        print("    MsrLstarWrite = %u\n", Intercepts->MsrLstarWrite);
+                        print("    MsrStarRead = %u\n", Intercepts->MsrStarRead);
+                        print("    MsrStarWrite = %u\n", Intercepts->MsrStarWrite);
+                        print("    MsrCstarRead = %u\n", Intercepts->MsrCstarRead);
+                        print("    MsrCstarWrite = %u\n", Intercepts->MsrCstarWrite);
+                        print("    ApicBaseMsrRead = %u\n", Intercepts->ApicBaseMsrRead);
+                        print("    ApicBaseMsrWrite = %u\n", Intercepts->ApicBaseMsrWrite);
+                        print("    MsrEferRead = %u\n", Intercepts->MsrEferRead);
+                        print("    MsrEferWrite = %u\n", Intercepts->MsrEferWrite);
+                        print("    GdtrWrite = %u\n", Intercepts->GdtrWrite);
+                        print("    IdtrWrite = %u\n", Intercepts->IdtrWrite);
+                        print("    LdtrWrite = %u\n", Intercepts->LdtrWrite);
+                        print("    TrWrite = %u\n", Intercepts->TrWrite);
+                        print("    MsrSysenterCsWrite = %u\n", Intercepts->MsrSysenterCsWrite);
+                        print("    MsrSysenterEipWrite = %u\n", Intercepts->MsrSysenterEipWrite);
+                        print("    MsrSysenterEspWrite = %u\n", Intercepts->MsrSysenterEspWrite);
+                        print("    MsrSfmaskWrite = %u\n", Intercepts->MsrSfmaskWrite);
+                        print("    MsrTscAuxWrite = %u\n", Intercepts->MsrTscAuxWrite);
+                        print("    MsrSgxLaunchControlWrite = %u\n", Intercepts->MsrSgxLaunchControlWrite);
                     }
                 }break;
                 case /*HvX64RegisterCrInterceptCr0Mask*/0xE0001:{
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HvX64RegisterCrInterceptCr0Mask:\n");
                         print("    %p\n", Parameters->mapping[0].value_low); // ?
                     }
                 }break;
                 case /*HvX64RegisterCrInterceptCr4Mask*/0xE0002:{
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HvX64RegisterCrInterceptCr4Mask:\n");
                         print("    %p\n", Parameters->mapping[0].value_low); // ?
                     }
                 }break;
                 case /*HvX64RegisterCrInterceptIa32MiscEnableMask*/0xE0003:{
-                    if(PRINT_VSM_EVENTS){
+                    if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                         print("HvX64RegisterCrInterceptIa32MiscEnableMask:\n");
                         print("    %p\n", Parameters->mapping[0].value_low); // ?
                     }
@@ -3306,6 +3382,9 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 // @note: These are set during SkpgxDefeatureProcessorForBugCheck, other than cr8 I don't think any other are ever set.
                 case 0x00020011: context->registers.vtl_state.rflags = Parameters->mapping[0].value_low; break;
                 
+                case 0x00040000: context->registers.vtl_state.cr0 = Parameters->mapping[0].value_low; break;
+                case 0x00040001: /*context->registers.vtl_state.cr2 = Parameters->mapping[0].value_low;*/ break; // @incomplete:
+                case 0x00040002: context->registers.vtl_state.cr3 = Parameters->mapping[0].value_low; break;
                 case 0x00040003: context->registers.vtl_state.cr4 = Parameters->mapping[0].value_low; break;
                 case 0x00040004: context->registers.vtl_state.cr8 = Parameters->mapping[0].value_low; break; // @note: Documentation says this is cr5, which does not exist, but the corresponding sekurekernel function is called 'ShvlSetNormalIrql'
                
@@ -3316,13 +3395,18 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 case 0x00080002: context->registers.vtl_state.gs_swap      = Parameters->mapping[0].value_low; break;
                 case 0x00080001: context->registers.vtl_state.ia32_efer    = Parameters->mapping[0].value_low; break;
                 case 0x00080004: context->registers.vtl_state.ia32_pat     = Parameters->mapping[0].value_low; break;
-                case 0x00080005: {} break; // Sysenter CS not sure we have that?
+                
                 case 0x00080000: context->registers.vtl_state.ia32_tsc     = Parameters->mapping[0].value_low; break;
                 case 0x0008007B: context->registers.vtl_state.ia32_tsc_aux = Parameters->mapping[0].value_low; break;
                 case 0x00080009: context->registers.vtl_state.ia32_lstar   = Parameters->mapping[0].value_low; break;
                 case 0x0008000A: context->registers.vtl_state.ia32_cstar   = Parameters->mapping[0].value_low; break;
                 case 0x00080008: context->registers.vtl_state.ia32_star    = Parameters->mapping[0].value_low; break;
                 case 0x0008000B: context->registers.vtl_state.ia32_fmask   = Parameters->mapping[0].value_low; break;
+                
+                // @incomplete:
+                case 0x00080005: /*context->registers.vtl_state.ia32_sep_sel = Parameters->mapping[0].value_low;*/ break;
+                case 0x00080006: /*context->registers.vtl_state.ia32_sep_rip = Parameters->mapping[0].value_low;*/ break;
+                case 0x00080007: /*context->registers.vtl_state.ia32_sep_rsp = Parameters->mapping[0].value_low;*/ break;
                 
                 default:{
                     print("**** Unhandled SetVpRegister 0x%x!\n", Parameters->mapping[0].register_name);
@@ -3346,7 +3430,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 u8 Reserved[6];
             } *Parameters = (void *)&fast_buffer;
             
-            if(PRINT_VSM_EVENTS) print("HvCallEnablePartitionVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->TargetVtl, Parameters->Flags);
+            if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS) print("HvCallEnablePartitionVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->TargetVtl, Parameters->Flags);
             
             u64 permission_size = (globals.snapshot.physical_memory_size / 0x1000) / 2; // 4 bits per physical page.
             context->vtl0_permissions = os_allocate_memory(permission_size);
@@ -3388,12 +3472,13 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 } InitialVpContext;
             } *Parameters = (void *)input_buffer;
             
-            if(Parameters->VpIndex != 0){
+            int okay = (Parameters->VpIndex == 0) || (ENABLE_SMP && (Parameters->VpIndex == 1));
+            if(!okay){
                 registers->rax = 0xE; // @cleanup: Does this not need some error bit?
                 break;
             }
             
-            if(PRINT_VSM_EVENTS){
+            if(PRINT_VSM_INITIALIZATION_EVENTS || PRINT_VSM_EVENTS){
                 print("HvEnableVpVtl %llx %x %x\n", Parameters->TargetPartitionId, Parameters->VpIndex, Parameters->TargetVtl);
                 
                 print("Rip %p Rsp %p Rflags %p (", Parameters->InitialVpContext.Rip, Parameters->InitialVpContext.Rsp, Parameters->InitialVpContext.Rflags); print_flags(Parameters->InitialVpContext.Rflags, stdout); print(")\n");
@@ -3410,6 +3495,10 @@ void helper_vmcall(struct context *context, struct registers *registers){
                 print("gdtl = 0x%x gdtr = %p\n", Parameters->InitialVpContext.gdtr.Limit, Parameters->InitialVpContext.gdtr.Base);
                 
                 print("Efer %p, Cr0 %p, Cr3 %p, Cr4 %p, MsrCrPat %p\n", Parameters->InitialVpContext.Efer, Parameters->InitialVpContext.Cr0, Parameters->InitialVpContext.Cr3, Parameters->InitialVpContext.Cr4, Parameters->InitialVpContext.MsrCrPat);
+            }
+            
+            if(Parameters->VpIndex == 1){
+                registers = &globals.second_thread_context_temp->registers;
             }
             
             registers->vtl_state.rip       = Parameters->InitialVpContext.Rip;
@@ -3438,7 +3527,7 @@ void helper_vmcall(struct context *context, struct registers *registers){
             registers->vtl_state.gs_base = Parameters->InitialVpContext.gs.base;
             
             // @note: Each vtl has its own local apic. Not sure what the initialization is...
-            initialize_local_apic(&registers->vtl_state.local_apic, context->registers.local_apic.id_register);
+            initialize_local_apic(&registers->vtl_state.local_apic, registers->local_apic.id_register);
         }break;
         
         case /*HvCallVtlCall*/0x11:

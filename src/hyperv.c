@@ -231,7 +231,7 @@ void hypervisor_perform_end_of_interrupt(struct context *context){
     struct serialized_local_apic local_apic = {0};
     
     u32 size_written;
-    s32 Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, context->thread_index, &local_apic, sizeof(local_apic), &size_written);
+    s32 Result = WHvGetVirtualProcessorInterruptControllerState2(globals.Partition, context->processor_index, &local_apic, sizeof(local_apic), &size_written);
     if(Result < 0 || size_written != sizeof(local_apic)){
         print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
         os_panic(1);
@@ -247,14 +247,14 @@ void hypervisor_perform_end_of_interrupt(struct context *context){
         }
     }
     
-    Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, context->thread_index, &local_apic, sizeof(local_apic));
+    Result = WHvSetVirtualProcessorInterruptControllerState2(globals.Partition, context->processor_index, &local_apic, sizeof(local_apic));
     if(Result < 0 || size_written != sizeof(local_apic)){
         print("[WHvSetVirtualProcessorInterruptControllerState2] %x\n", Result);
         os_panic(1);
     }
 }
 
-void update_exception_exit_bitmap(struct context *context){
+void update_exception_exit_bitmap(void){
     // 
     // When we are single stepping, we have to exit on most exceptions,
     // otherwise, the single step would not follow into the exception vector.
@@ -285,7 +285,7 @@ void update_exception_exit_bitmap(struct context *context){
     
     u64 ExceptionBitmap = globals.single_stepping ? ExceptionBitmapSingleStepping : (1ull << /*WHvX64ExceptionTypeDebugTrapOrFault*/0x1);
     
-    s32 Result = WHvSetPartitionProperty(context->Partition, /*WHvPartitionPropertyCodeExceptionExitBitmap*/2, &ExceptionBitmap, sizeof(ExceptionBitmap));
+    s32 Result = WHvSetPartitionProperty(globals.Partition, /*WHvPartitionPropertyCodeExceptionExitBitmap*/2, &ExceptionBitmap, sizeof(ExceptionBitmap));
     if(Result < 0){
         print("[WHvSetPartitionProperty(WHvPartitionPropertyCodeExceptionExitBitmap)] failed with result 0x%x\n", Result);
         os_panic(1);
@@ -302,7 +302,7 @@ void hyperv_apply_local_apic_state(struct context *context){
     struct serialized_local_apic local_apic = {0};
     
     u32 size_written;
-    s32 Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, context->thread_index, &local_apic, sizeof(local_apic), &size_written);
+    s32 Result = WHvGetVirtualProcessorInterruptControllerState2(globals.Partition, context->processor_index, &local_apic, sizeof(local_apic), &size_written);
     if(Result < 0 || size_written != sizeof(local_apic)){
         print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
         os_panic(1);
@@ -345,7 +345,7 @@ void hyperv_apply_local_apic_state(struct context *context){
     
     local_apic.timer_divide_configuration_register[0] = registers->local_apic.timer_divide_configuration_register;
     
-    Result = WHvSetVirtualProcessorInterruptControllerState2(context->Partition, context->thread_index, &local_apic, sizeof(local_apic));
+    Result = WHvSetVirtualProcessorInterruptControllerState2(globals.Partition, context->processor_index, &local_apic, sizeof(local_apic));
     if(Result < 0 || size_written != sizeof(local_apic)){
         print("[WHvSetVirtualProcessorInterruptControllerState2] %x\n", Result);
         os_panic(1);
@@ -353,6 +353,8 @@ void hyperv_apply_local_apic_state(struct context *context){
 }
 
 void start_execution_hypervisor(struct context *context){
+    
+    HANDLE Partition = globals.Partition;
     
     context->use_hypervisor = 1;
     
@@ -457,7 +459,7 @@ void start_execution_hypervisor(struct context *context){
     registers->fs.base = registers->fs_base;
     
     u32 xsave_area_size = 0; 
-    WHvGetVirtualProcessorXsaveState(context->Partition, /*VpIndex*/0, null, 0, &xsave_area_size);
+    WHvGetVirtualProcessorXsaveState(Partition, /*VpIndex*/0, null, 0, &xsave_area_size);
     if(xsave_area_size > sizeof(struct xsave_area)){
         print("This computer reports a bigger xsave area size than currently supported. (0x%x vs 0x%x)\n", xsave_area_size, sizeof(struct xsave_area));
         os_panic(1);
@@ -471,15 +473,15 @@ void start_execution_hypervisor(struct context *context){
         // If we are starting by 'single stepping', it means we want to enter the debugger on the first instruction.
         // Hence, we put a breakpoint on the instruction we are currently at.
         hypervisor_set_breakpoint(context, registers, BREAKPOINT_execute, BREAKPOINT_FLAG_oneshot, registers->rip, 1, (struct string){0});
-        update_exception_exit_bitmap(context);
+        update_exception_exit_bitmap();
     }
     
-    u32 virtual_processor_index = context->thread_index;
+    u32 virtual_processor_index = context->processor_index;
     
     if(virtual_processor_index){
         u32 WHvRegisterInternalActivityState = /*WHvRegisterInternalActivityState*/0x80000005;
         struct whv_register_value value = {0};
-        int Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &WHvRegisterInternalActivityState, 1, &value);
+        int Result = WHvSetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &WHvRegisterInternalActivityState, 1, &value);
         if(Result < 0){
             print("[WHvSetVirtualProcessorRegisters] Unsetting HvRegisterExplicitSuspend failed with result 0x%x\n", Result);
             _exit(1);
@@ -488,9 +490,8 @@ void start_execution_hypervisor(struct context *context){
         // 
         // Need to update the exception bitmap even if not single_stepping to ensure the General Detect Enable stuff works. This took me long to debug.
         // 
-        update_exception_exit_bitmap(context);
+        update_exception_exit_bitmap();
     }
-    
     
     while(true){
         
@@ -571,7 +572,7 @@ void start_execution_hypervisor(struct context *context){
         
         static_assert(array_count(RegisterValues) == array_count(RegisterNames));
         
-        s32 Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &RegisterNames[0], array_count(RegisterNames)-1, &RegisterValues[0]);
+        s32 Result = WHvSetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &RegisterNames[0], array_count(RegisterNames)-1, &RegisterValues[0]);
         if(Result < 0){
             print("[WHvSetVirtualProcessorRegisters] failed with result 0x%x\n", Result);
             os_panic(1);
@@ -585,7 +586,7 @@ void start_execution_hypervisor(struct context *context){
             
             assert(IntelSpecificRegisterIndex == array_count(IntelSpecificRegisterValues));
             
-            Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &IntelSpecificRegisterNames[0], array_count(IntelSpecificRegisterNames), &IntelSpecificRegisterValues[0]);
+            Result = WHvSetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &IntelSpecificRegisterNames[0], array_count(IntelSpecificRegisterNames), &IntelSpecificRegisterValues[0]);
             if(Result < 0){
                 print("[WHvSetVirtualProcessorRegisters (intel-specific)] failed with result 0x%x\n", Result);
                 os_panic(1);
@@ -597,7 +598,7 @@ void start_execution_hypervisor(struct context *context){
         //
         struct xsave_area xsave_area = xsave_area_from_registers(registers);
         
-        Result = WHvSetVirtualProcessorXsaveState(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &xsave_area, xsave_area_size);
+        Result = WHvSetVirtualProcessorXsaveState(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &xsave_area, xsave_area_size);
         if(Result < 0){
             print("[WHvSetVirtualProcessorXsaveState] failed with result 0x%x\n", Result);
             os_panic(1);
@@ -641,7 +642,7 @@ void start_execution_hypervisor(struct context *context){
         // 
         while(true){
             
-            Result = WHvRunVirtualProcessor(context->Partition, virtual_processor_index, &ExitContext, sizeof(ExitContext));
+            Result = WHvRunVirtualProcessor(Partition, virtual_processor_index, &ExitContext, sizeof(ExitContext));
             if(Result < 0){
                 print("[WHvRunVirtualProcessor] failed with Result 0x%x\n", Result);
                 os_panic(1);
@@ -727,25 +728,24 @@ void start_execution_hypervisor(struct context *context){
                             .Vector          = (u32)ICR.vector_number,
                         };
                         
-                        Result = WHvRequestInterrupt(context->Partition, &interrupt_control, sizeof(interrupt_control));
+                        Result = WHvRequestInterrupt(Partition, &interrupt_control, sizeof(interrupt_control));
                         if(Result < 0){
                             print("[WHvRequestInterrupt] Failed with code 0x%x\n", Result);
                             os_panic(1);
                         }
                     }
                     
-                    if(queue){
-                        assert(globals.second_thread_context);
+                    if(globals.second_thread_context){
                         struct context *other = context == globals.second_thread_context ? globals.main_thread_context : globals.second_thread_context;
                         
                         struct pending_interrupt *pending_interrupt = &other->pending_interrupts[other->pending_interrupt_reserved % array_count(other->pending_interrupts)];
                         pending_interrupt->vector_number    = (u8)ICR.vector_number;
                         pending_interrupt->destination      = (u8)ICR.destination;
-                        pending_interrupt->destination_type = (u8)ICR.destination_type;
+                        pending_interrupt->target_vtl       = (u8)context->registers.vtl_state.current_vtl;
                         pending_interrupt->destination_mode = (u8)ICR.destination_mode;
                         other->pending_interrupt_reserved++;
                         
-                        s32 CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/other->thread_index, /*Flags (must be zero)*/0);
+                        s32 CancelResult = WHvCancelRunVirtualProcessor(Partition, /*virtual processor index*/other->processor_index, /*Flags (must be zero)*/0);
                         if(CancelResult) print("CancelResult %x\n", CancelResult);
                     }
                 }else{
@@ -760,7 +760,7 @@ void start_execution_hypervisor(struct context *context){
                             .Vector          = (u32)ICR.vector_number,
                         };
                         
-                        Result = WHvRequestInterrupt(context->Partition, &interrupt_control, sizeof(interrupt_control));
+                        Result = WHvRequestInterrupt(Partition, &interrupt_control, sizeof(interrupt_control));
                         if(Result < 0){
                             print("[WHvRequestInterrupt] Failed with code 0x%x\n", Result);
                             os_panic(1);
@@ -773,12 +773,12 @@ void start_execution_hypervisor(struct context *context){
                         struct pending_interrupt *pending_interrupt = &other->pending_interrupts[other->pending_interrupt_reserved % array_count(other->pending_interrupts)];
                         pending_interrupt->vector_number    = (u8)ICR.vector_number;
                         pending_interrupt->destination      = (u8)ICR.destination;
-                        pending_interrupt->destination_type = (u8)ICR.destination_type;
+                        pending_interrupt->target_vtl       = (u8)context->registers.vtl_state.current_vtl;
                         pending_interrupt->destination_mode = (u8)ICR.destination_mode;
                         
                         other->pending_interrupt_reserved++;
                         
-                        s32 CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/other->thread_index, /*Flags (must be zero)*/0);
+                        s32 CancelResult = WHvCancelRunVirtualProcessor(Partition, /*virtual processor index*/other->processor_index, /*Flags (must be zero)*/0);
                         if(CancelResult) print("CancelResult %x\n", CancelResult);
                     }
                 }
@@ -790,7 +790,7 @@ void start_execution_hypervisor(struct context *context){
             
             struct whv_register_value next_rip = {ExitContext.VpContext.Rip + ExitContext.VpContext.InstructionLength};
             
-            Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterRip*/0x00000010}, 1, &next_rip);
+            Result = WHvSetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterRip*/0x00000010}, 1, &next_rip);
             if(Result < 0){
                 print("[WHvSetVirtualProcessorRegisters] Could not set rip.\n");
             }
@@ -801,7 +801,7 @@ void start_execution_hypervisor(struct context *context){
             // Get the register state and update 'registers'.
             //
             
-            Result = WHvGetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, RegisterNames, array_count(RegisterNames), RegisterValues);
+            Result = WHvGetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, RegisterNames, array_count(RegisterNames), RegisterValues);
             if(Result < 0){
                 print("[WHvGetVirtualProcessorRegisters] Returned with Result 0x%x\n", Result);
                 os_panic(1);
@@ -894,7 +894,7 @@ void start_execution_hypervisor(struct context *context){
             
             if(globals.cpu_vendor == VENDOR_INTEL){
                 
-                Result = WHvGetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, IntelSpecificRegisterNames, array_count(IntelSpecificRegisterNames), IntelSpecificRegisterValues);
+                Result = WHvGetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, IntelSpecificRegisterNames, array_count(IntelSpecificRegisterNames), IntelSpecificRegisterValues);
                 if(Result < 0){
                     print("[WHvGetVirtualProcessorRegisters] Returned with Result 0x%x\n", Result);
                     os_panic(1);
@@ -909,7 +909,7 @@ void start_execution_hypervisor(struct context *context){
             
             u32 BytesWritten = 0;
             
-            Result = WHvGetVirtualProcessorXsaveState(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &xsave_area, xsave_area_size, &BytesWritten);
+            Result = WHvGetVirtualProcessorXsaveState(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &xsave_area, xsave_area_size, &BytesWritten);
             if(Result < 0){
                 print("[WHvGetVirtualProcessorXsaveState] failed with result 0x%x\n", Result);
                 os_panic(1);
@@ -924,7 +924,7 @@ void start_execution_hypervisor(struct context *context){
             
             {
                 struct whv_register_value fp_control = {0};
-                Result = WHvGetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterFpControlStatus*/0x00001018}, 1, &fp_control);
+                Result = WHvGetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterFpControlStatus*/0x00001018}, 1, &fp_control);
                 if(Result < 0){
                     print("[WHvGetVirtualProcessorRegisters] Returned with Result 0x%x\n", Result);
                     os_panic(1);
@@ -937,7 +937,7 @@ void start_execution_hypervisor(struct context *context){
             
             {
                 struct whv_register_value xmm_control = {0};
-                Result = WHvGetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterXmmControlStatus*/0x00001019}, 1, &xmm_control);
+                Result = WHvGetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvX64RegisterXmmControlStatus*/0x00001019}, 1, &xmm_control);
                 if(Result < 0){
                     print("[WHvGetVirtualProcessorRegisters] Returned with Result 0x%x\n", Result);
                     os_panic(1);
@@ -955,7 +955,7 @@ void start_execution_hypervisor(struct context *context){
                 struct serialized_local_apic local_apic = {0};
                 
                 u32 size_written;
-                Result = WHvGetVirtualProcessorInterruptControllerState2(context->Partition, virtual_processor_index, &local_apic, sizeof(local_apic), &size_written);
+                Result = WHvGetVirtualProcessorInterruptControllerState2(Partition, virtual_processor_index, &local_apic, sizeof(local_apic), &size_written);
                 if(Result < 0 || size_written != sizeof(local_apic)){
                     print("[WHvGetVirtualProcessorInterruptControllerState2] %x %x %x\n", Result, size_written, sizeof(local_apic));
                     os_panic(1);
@@ -1102,7 +1102,7 @@ void start_execution_hypervisor(struct context *context){
                             print("Hypervisor tried to access physical address %p, but we have no mapping for it.\n", guest_physical_address);
                         }
                         
-                        Result = WHvMapGpaRange(context->Partition, translated, guest_physical_address, 0x1000, /*WHvMapGpaRangeFlagRead*/1 | /*WHvMapGpaRangeFlagExecute*/4);
+                        Result = WHvMapGpaRange(Partition, translated, guest_physical_address, 0x1000, /*WHvMapGpaRangeFlagRead*/1 | /*WHvMapGpaRangeFlagExecute*/4);
                         if(Result < 0){
                             print("[WHvMapGpaRange] GPA %p : HVA %p (Read/Execute) failed with result %x\n", guest_physical_address, translated, Result);
                         }
@@ -1113,7 +1113,7 @@ void start_execution_hypervisor(struct context *context){
                             print("Hypervisor tried to access physical address %p, but we have no mapping for it.\n", guest_physical_address);
                         }
                         
-                        Result = WHvMapGpaRange(context->Partition, translated, guest_physical_address, 0x1000, /*WHvMapGpaRangeFlagRead*/1 | /*WHvMapGpaRangeFlagWrite*/2 | /*WHvMapGpaRangeFlagExecute*/4);
+                        Result = WHvMapGpaRange(Partition, translated, guest_physical_address, 0x1000, /*WHvMapGpaRangeFlagRead*/1 | /*WHvMapGpaRangeFlagWrite*/2 | /*WHvMapGpaRangeFlagExecute*/4);
                         if(Result < 0){
                             print("[WHvMapGpaRange] GPA %p : HVA %p (Read/Write/Execute) failed with result %x\n", guest_physical_address, translated, Result);
                         }
@@ -1193,12 +1193,12 @@ void start_execution_hypervisor(struct context *context){
                         registers->fs.base = registers->fs_base;
                         
                         // Why do we need to delete and reallocate the partition? I dunno!
-                        s32 WHvDeletePartitionResult = WHvDeletePartition(context->Partition); // (I tried memsetting all physical memory instead, but it did not work)
+                        s32 WHvDeletePartitionResult = WHvDeletePartition(Partition); // (I tried memsetting all physical memory instead, but it did not work)
                         if(WHvDeletePartitionResult < 0){
                             print("WHvDeletePartition failed with hresutl 0x%x\n", WHvDeletePartitionResult);
                         }
                         
-                        context->Partition = initialize_hypervisor();
+                        globals.Partition = Partition = initialize_hypervisor();
                         
                         continue;
                     }
@@ -1473,7 +1473,7 @@ void start_execution_hypervisor(struct context *context){
                     .pending_event.ExceptionParameter = Exception->ExceptionParameter,
                 };
                 
-                Result = WHvSetVirtualProcessorRegisters(context->Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvRegisterPendingEvent*/0x80000002}, 1, &pending_event);
+                Result = WHvSetVirtualProcessorRegisters(Partition, /*VirtualProcessorIndex*/virtual_processor_index, &(u32){/*WHvRegisterPendingEvent*/0x80000002}, 1, &pending_event);
                 if(Result < 0){
                     print("[WHvSetVirtualProcessorRegisters] Could not set exception pending.\n");
                 }
@@ -1532,22 +1532,24 @@ void start_execution_hypervisor(struct context *context){
                     break;
                 }
                 
+                // Don't allow any async events, while we are single stepping.
+                if(globals.single_stepping) break;
+                
                 while(context->pending_interrupt_send < context->pending_interrupt_reserved){
                     struct pending_interrupt *pending_interrupt = &context->pending_interrupts[context->pending_interrupt_send++ % array_count(context->pending_interrupts)];
                     
+                    if(pending_interrupt->target_vtl != context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
                     if(pending_interrupt->destination_mode == /*physical*/0 || (pending_interrupt->destination & (registers->local_apic.local_destination_register>>24))){
                         pend_interrupt(context, registers, pending_interrupt->vector_number);
                     }
+                    if(pending_interrupt->target_vtl != context->registers.vtl_state.current_vtl) switch_vtl(&context->registers);
                 }
+                
+                if(context->registers.vtl_state.current_vtl > 0) break;
                 
                 if(!context->wait_for_eom && context->pending_message_send < context->pending_message_reserved){
                     vmbus_process_pending_messages(context);
                 }
-                
-                // Don't allow any async events, while we are single stepping.
-                if(globals.single_stepping) break;
-                
-                if(context->registers.vtl_state.current_vtl > 0) break;
                 
                 int did_something = hacky_display_input_handling(context);
                 if(did_something) break; // For now, only ever initiate one event in an update.
@@ -1601,7 +1603,6 @@ void start_execution_hypervisor(struct context *context){
     assert(!"We somehow left the Hypervisor loop?");
 }
 
-
 void cancel_virtual_processor(void){
     
     // @note: We don't want to send these when we are single stepping and we are currently debugging the system.
@@ -1609,10 +1610,10 @@ void cancel_virtual_processor(void){
     if(globals.in_debugger || (globals.single_stepping && IsDebuggerPresent())) return; 
     if(!globals.main_thread_context->use_hypervisor) return;
     
-    s32 CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/0, /*Flags (must be zero)*/0);
+    s32 CancelResult = WHvCancelRunVirtualProcessor(globals.Partition, /*virtual processor index*/0, /*Flags (must be zero)*/0);
     if(CancelResult) print("CancelResult %x\n", CancelResult);
     
-    CancelResult = WHvCancelRunVirtualProcessor(globals.main_thread_context->Partition, /*virtual processor index*/1, /*Flags (must be zero)*/0);
+    CancelResult = WHvCancelRunVirtualProcessor(globals.Partition, /*virtual processor index*/1, /*Flags (must be zero)*/0);
     if(CancelResult) print("CancelResult %x\n", CancelResult);
 }
 

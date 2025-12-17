@@ -364,6 +364,7 @@ struct context{
     int use_hypervisor;
     int snapshot_mode;
     int thread_index;
+    u32 processor_index; // For fuzzing I assume this must be different from `thread_index`.
     
     // 
     // If 'skip_setting_permission_bits' is true, 'translate_page_number_to_physical' skips setting any
@@ -523,11 +524,10 @@ struct context{
     //
     // Hypervisor members.
     //
-    HANDLE Partition;
     u64 potentially_usermode_snapshotting_breakpoint;
     
     u32 hypervisor_require_auto_eoi;
-    u32 send_packet_skip_interrupt; // @cleanup: get rid of this?
+    u32 vtl_not_initialized;
     
     // :timer_interrupts
     // 
@@ -542,7 +542,7 @@ struct context{
     struct pending_interrupt{
         u8 vector_number;
         u8 destination;
-        u8 destination_type;
+        u8 target_vtl;
         u8 destination_mode;
     } pending_interrupts[16]; // 16 ought to be enough for everybody!
     
@@ -796,14 +796,15 @@ struct globals{
         struct vmbus_channel *keyboard;
         struct vmbus_channel *mouse;
         
-        int send_packet_skip_interrupt;
         u32 target_vp;
         
         struct ticket_spinlock message_lock;
     } vmbus;
     
+    HANDLE Partition;
     struct context *main_thread_context;
     struct context *second_thread_context;
+    struct context *second_thread_context_temp;
     
     u64 big_allocation_base;
     u64 process_cr3;
@@ -1956,8 +1957,28 @@ if(cstring_ends_with_case_insensitive(arg, "." #format)){              \
         if(use_jit){
             start_execution_jit(context);
         }else{
-            context->Partition = initialize_hypervisor();
-            context->thread_index = 0;
+            globals.Partition = initialize_hypervisor();
+            context->processor_index = 0;
+            
+            if(ENABLE_SMP){
+                // Well we don't know how to do this factoring Xd.
+                struct context *thread_two = os_allocate_memory(sizeof(*context));
+                
+                thread_two->thread_index             = 1;
+                thread_two->processor_index          = 1;
+                thread_two->snapshot_mode            = 1;
+                thread_two->physical_memory_size     = context->physical_memory_size;
+                thread_two->physical_memory          = context->physical_memory;
+                thread_two->physical_memory_copied   = context->physical_memory_copied;
+                thread_two->physical_memory_dirty    = context->physical_memory_dirty;
+                thread_two->physical_memory_executed = context->physical_memory_executed;
+                
+                void context_initialize_main_and_thread_context_common(struct context *context);
+                context_initialize_main_and_thread_context_common(thread_two);
+                
+                globals.second_thread_context_temp = thread_two;
+            }
+            
             start_execution_hypervisor(context);
         }
         

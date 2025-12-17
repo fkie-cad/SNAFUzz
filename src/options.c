@@ -138,9 +138,11 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 // 
 // BUT, we have done it, it boots with more than one core!
 // 
+// This define enabled/disables the second entry in the MADT.
+// 
 //                                     - Pascal Beyer 15.12.2025
 // 
-#define ENABLE_SMP 1
+#define ENABLE_SMP 0
 
 // 
 // Print random stuff from the bios. Mostly an option to print-debug the bios.
@@ -165,3 +167,4 @@ s64 FUZZ_CASE_TIMEOUT = 5000000;
 #define PRINT_DISK_EVENTS       0
 #define PRINT_INSTRUCTION_HELPER_EVENTS 0
 #define PRINT_VSM_EVENTS 0
+#define PRINT_VSM_INITIALIZATION_EVENTS 0
